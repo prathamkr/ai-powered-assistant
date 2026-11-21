@@ -6,7 +6,6 @@ from kivy.graphics import Color, Ellipse, Line
 from kivy.metrics import dp, sp
 from kivy.properties import BooleanProperty
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.modalview import ModalView
 from kivy.uix.widget import Widget
@@ -84,9 +83,9 @@ class Orb(Widget):
 
 
 class Hero(BoxLayout):
-    """Empty-state greeting: orb, "Hey", a one-line question and tap-to-fill example prompts."""
+    """Empty-state greeting: the orb, "Hey" and a one-line question."""
 
-    def __init__(self, on_pick, **kw):
+    def __init__(self, **kw):
         super().__init__(orientation="vertical", size_hint=(1, None), spacing=dp(6), **kw)
         self.orb = Orb(size_hint_y=None, height=dp(210))
         self.hey = Label(text="Hey", font_name=fonts.HEADING, size_hint_y=None, height=dp(56), font_size=sp(38))
@@ -94,14 +93,9 @@ class Hero(BoxLayout):
                          font_size=sp(16))
         self._tint()
         T.bind(version=self._tint)
-        grid = GridLayout(cols=2, size_hint_y=None, height=dp(104), spacing=dp(8), padding=[dp(14), dp(8), dp(14), 0])
-        for label, fill in SUGGESTIONS:
-            b = ThemedButton(text=label, mode="text", kind="ghost", wide=True, halign="center", font_px=12, height=dp(46))
-            b.bind(on_release=lambda _b, f=fill: on_pick(f))
-            grid.add_widget(b)
-        for w in (self.orb, self.hey, self.ask, grid):
+        for w in (self.orb, self.hey, self.ask):
             self.add_widget(w)
-        self.height = sum(c.height for c in self.children) + dp(6) * 3
+        self.height = sum(c.height for c in self.children) + dp(6) * 2
         style_label(self.ask, "muted")
 
     def _tint(self, *_):

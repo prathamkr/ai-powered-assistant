@@ -43,7 +43,7 @@ class Chrome:
     def assemble(self, status, chat, card, entry):
         self.status, self.chat, self.card, self.entry = status, chat, card, entry
         style_bare_input(entry)
-        self.hero = Hero(on_pick=self.fill_entry)
+        self.hero = Hero()
         entry.bind(size=self._center_text)
         self.apply(self.cfg, save=False)
         return self.root
@@ -169,7 +169,7 @@ class Chrome:
         self.chat.size_hint = (1, 1)
         self.chat.pos_hint = {"x": 0, "y": 0}
         stage.add_widget(self.chat)
-        self.hero.pos_hint = {"center_x": 0.5, "top": 0.97}
+        self.hero.pos_hint = {"center_x": 0.5, "center_y": 0.52}   # greeting sits in the middle of the free space
         stage.add_widget(self.hero)
         body = BoxLayout(orientation="vertical", spacing=dp(lay["spacing"]))
         body.add_widget(stage)
