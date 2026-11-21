@@ -4,7 +4,6 @@ everything live.
 """
 import weakref
 
-from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.event import EventDispatcher
 from kivy.graphics import Color, Ellipse, Line, Rectangle, RoundedRectangle
@@ -14,7 +13,6 @@ from kivy.properties import (BooleanProperty, DictProperty, NumericProperty, Opt
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
-from kivy.uix.slider import Slider
 from kivy.uix.widget import Widget
 
 from . import config, fonts, themes
@@ -251,41 +249,6 @@ class ThemedButton(ButtonBehavior, BoxLayout):
             pad_widget.size_hint_x = 1 if flex else None
             pad_widget.width = 0
         self._fit()
-
-
-# ---------- slider with a themed track and knob ----------
-class LazeySlider(Slider):
-    """Kivy's Slider with its own look: a thin rounded track, an accent-coloured filled part and a round knob.
-    Touch handling, min/max/step/value are the stock Slider's."""
-
-    def __init__(self, **kw):
-        kw.setdefault("background_width", 0)      # hide the stock track, knob and value line
-        kw.setdefault("cursor_size", (0, 0))
-        kw.setdefault("value_track", False)
-        super().__init__(**kw)
-        self.bind(pos=self._paint, size=self._paint, value=self._paint, min=self._paint, max=self._paint)
-        T.bind(version=self._paint)
-        self._paint()
-        Clock.schedule_once(self._paint, 0)
-        Clock.schedule_once(self._paint, 0.15)
-
-    def _paint(self, *_):
-        pad = self.padding
-        x0, x1 = self.x + pad, self.right - pad
-        y = self.center_y
-        frac = self.value_normalized
-        kx = x0 + (x1 - x0) * frac
-        r = min(dp(11), self.height / 2 - dp(1))
-        self.canvas.after.clear()
-        with self.canvas.after:
-            Color(*themes.hex_to_rgba(themes.mix(T.h("panel"), T.h("accent"), 0.28)))
-            Line(points=[x0, y, x1, y], width=dp(3), cap="round")
-            Color(*T.c("accent"))
-            Line(points=[x0, y, max(x0, kx), y], width=dp(3), cap="round")
-            Color(*themes.hex_to_rgba(T.h("accent"), 0.22))
-            Ellipse(pos=(kx - r - dp(4), y - r - dp(4)), size=(2 * (r + dp(4)), 2 * (r + dp(4))))
-            Color(*themes.hex_to_rgba(themes.mix(T.h("accent"), "#ffffff", 0.2)))
-            Ellipse(pos=(kx - r, y - r), size=(2 * r, 2 * r))
 
 
 # ---------- surfaces (rounded fills drawn behind a widget) ----------

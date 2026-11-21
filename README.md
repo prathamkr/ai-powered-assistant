@@ -105,8 +105,9 @@ assistant says appear in the chat.
 
 - **Menu button**: Theme, Calendar, Preferences, Voice. Calendar shows a month grid with dots on days that
   have tasks and the day's agenda (tasks can be deleted there; "Open phone calendar" works on Android only).
-  Voice sets when replies are spoken, the voice (Nova, Atlas, Echo, Luna, Spark), pitch, speed and offline
-  recognition. The mic button listens and turns into a stop button while it does.
+  Voice sets when replies are spoken (after voice, always, off) and which voice (Nova, Atlas, Echo, Luna,
+  Spark; each voice brings its own pitch and speed). Recognition always prefers on-device. The mic button
+  listens and turns into a stop button while it does.
 - **Theme** (menu > Theme): pick one of 8 themes (Violet by default, Ocean, Emerald, Rose, Amber, Graphite,
   Daylight, High contrast). The change shows live and is remembered. The layout, button placement and
   icons are fixed (see `DEFAULT_LAYOUT` / `DEFAULT_BUTTONS` in `pa_ui/config.py`).

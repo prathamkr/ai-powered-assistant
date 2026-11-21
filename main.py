@@ -25,7 +25,7 @@ from pa_ui.chrome import Chrome
 from pa_ui.config import APP_NAME, ConfigStore
 from pa_ui.editor import StyleEditor
 from pa_ui.lazey_widgets import SUGGESTIONS, Bubble
-from pa_ui.widgets import LazeySlider, Status, T, ThemedButton, style_input, style_label, style_popup, surface
+from pa_ui.widgets import Status, T, ThemedButton, style_input, style_label, style_popup, surface
 
 
 class AssistantApp(App):
@@ -129,6 +129,7 @@ class AssistantApp(App):
             self.say("Startup failed: %s: %s" % (type(e).__name__, e), "sys")
             return
         self.vset = V.load_settings(self.voice_path())
+        self.vset.prefer_offline = True  # recognition always prefers on-device (there is no switch for it)
         self.status.text = "Parser: %s" % self.asst.backend.name
         self.chrome.refresh_hero()  # the greeting (with example prompts) replaces the old hello message
 
@@ -371,7 +372,7 @@ class AssistantApp(App):
             self.say(value, "sys")
 
     def on_voice(self):
-        """Menu > Voice: when to speak replies, which voice, pitch and speed, test, offline preference."""
+        """Menu > Voice: when to speak replies and which voice (pitch and speed come with the voice)."""
         box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
         box.bind(minimum_height=box.setter("height"))
         self.popup("Voice", box)
@@ -412,28 +413,6 @@ class AssistantApp(App):
                                  kind="selected" if p.id == s.profile_id else "normal")
                 b.bind(on_release=lambda _b, pid=p.id: (s.use_profile(pid), save(), refresh()))
                 box.add_widget(b)
-            for attr, title, lo, hi in (("pitch", "Pitch", V.PITCH_MIN, V.PITCH_MAX),
-                                        ("rate", "Speed", V.RATE_MIN, V.RATE_MAX)):
-                lb = label("%s: %.2f" % (title, getattr(s, attr)))
-                sl = LazeySlider(min=lo, max=hi, value=getattr(s, attr), size_hint_y=None, height=dp(36))
-
-                def changed(_w, v, attr=attr, title=title, lb=lb):
-                    setattr(s, attr, round(v, 2))
-                    lb.text = "%s: %.2f" % (title, v)
-                sl.bind(value=changed)
-                sl.bind(on_touch_up=lambda w, t: save() if w.collide_point(*t.pos) else None)
-                box.add_widget(sl)
-            row2 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
-            test = ThemedButton(text="Test voice", icon="speaker", size_hint_x=1, height=dp(46), font_px=13)
-            test.bind(on_release=lambda *_: self.voice.speak("Hello! This is how I will read my replies.", s))
-            stop = ThemedButton(text="Stop", icon="close", size_hint_x=1, height=dp(46), font_px=13)
-            stop.bind(on_release=lambda *_: self.voice.stop_speaking())
-            row2.add_widget(test)
-            row2.add_widget(stop)
-            box.add_widget(row2)
-            label("Recognition")
-            chips(((True, "Prefer offline"), (False, "Online allowed")), s.prefer_offline,
-                  lambda v: setattr(s, "prefer_offline", v))
             if self.voice.tts_voice != "-":
                 label("Last voice used: %s" % self.voice.tts_voice, 36, "muted")
         refresh()
