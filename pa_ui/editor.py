@@ -17,7 +17,7 @@ from kivy.uix.slider import Slider
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
-from . import config, themes
+from . import config, fonts, themes
 from .iconset import CHOOSABLE
 from .widgets import T, ThemedButton, gradient_texture, style_input, style_label, style_popup, surface
 
@@ -37,7 +37,8 @@ def _col(**kw):
 
 
 def text_label(text, role="text", size=14, bold=False, halign="left", height=None):
-    lb = Label(text=text, size_hint_y=None, halign=halign, valign="middle", bold=bold, font_size=sp(size))
+    face = fonts.HEADING if bold else (fonts.SUB if role == "muted" else fonts.UI)
+    lb = Label(text=text, size_hint_y=None, halign=halign, valign="middle", font_name=face, font_size=sp(size))
     lb.bind(width=lambda *_: setattr(lb, "text_size", (lb.width, None)))
     if height:
         lb.height = dp(height)

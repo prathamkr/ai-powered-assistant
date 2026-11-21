@@ -17,7 +17,7 @@ import os
 from . import themes
 from .iconset import CHOOSABLE
 
-APP_NAME = "Pacsit"
+APP_NAME = "Lazey"
 TAGLINE = "Your Personal AI Assistant"
 
 # id -> (default label, default icon, handler name on the app)
@@ -50,7 +50,7 @@ DEFAULT_BUTTONS = [  # (id, region) in display order
     ("plus", "input_left"), ("mic", "input_right"), ("send", "input_right")]
 
 PRESETS = {
-    "pacsit": ("Pacsit", dict(), DEFAULT_BUTTONS),
+    "lazey": ("Lazey", dict(), DEFAULT_BUTTONS),
     "minimal": ("Minimal", dict(show_hero=False, show_tagline=False, bubbles="plain", radius=12, btn_h=48),
                 DEFAULT_BUTTONS),
     "big": ("Big touch", dict(btn_h=68, radius=26, font_scale=1.2, spacing=10), DEFAULT_BUTTONS),

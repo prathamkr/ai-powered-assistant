@@ -15,7 +15,7 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.widget import Widget
 
-from . import config, themes
+from . import config, fonts, themes
 from .iconset import ICONS
 
 
@@ -415,7 +415,8 @@ def _popup_style(pop):
     pop.background_color = T.c("panel")
     pop.title_color = T.c("text")
     pop.separator_color = T.c("accent")
-    pop.title_size = sp(16)
+    pop.title_font = fonts.HEADING
+    pop.title_size = sp(17)
 
 
 def style_popup(pop):

@@ -1,9 +1,9 @@
 [app]
-title = Pacsit
-package.name = pacsit
+title = Lazey
+package.name = lazey
 package.domain = org.pa
 source.dir = .
-source.include_exts = py
+source.include_exts = py,ttf,txt
 source.exclude_dirs = tests, docs, bin, .buildozer, __pycache__
 version = 0.2
 # pycryptodome (not `cryptography`): has a python-for-android recipe and no Rust needed.

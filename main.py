@@ -1,4 +1,4 @@
-"""Pacsit: single-screen Kivy UI for the local assistant prototype."""
+"""Lazey: single-screen Kivy UI for the local assistant prototype."""
 import threading
 
 from kivy.app import App
@@ -16,7 +16,7 @@ from pa_ui.calendar_view import CalendarView
 from pa_ui.chrome import Chrome
 from pa_ui.config import APP_NAME, ConfigStore
 from pa_ui.editor import StyleEditor
-from pa_ui.pacsit_widgets import SUGGESTIONS, Bubble
+from pa_ui.lazey_widgets import SUGGESTIONS, Bubble
 from pa_ui.widgets import Status, T, ThemedButton, style_input, style_label, style_popup, surface
 
 

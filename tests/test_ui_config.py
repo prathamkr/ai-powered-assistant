@@ -116,8 +116,9 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("theme", menu)
         self.assertIn("calendar", menu)
 
-    def test_app_is_called_pacsit(self):
-        self.assertEqual(C.APP_NAME, "Pacsit")
+    def test_app_is_called_lazey(self):
+        self.assertEqual(C.APP_NAME, "Lazey")
+        self.assertNotIn("pacsit", repr(C.default_config()).lower())
 
     def test_normalize_survives_garbage(self):
         for raw in (None, 5, "x", [], {"buttons": "x", "layout": 3, "custom": 7, "theme": 9, "background": []},
@@ -243,6 +244,28 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(cfg["layout"]["btn_h"], 60)
             self.assertEqual(len(cfg["buttons"]), len(C.BUTTONS))
             self.assertEqual(btn(cfg, "send")["region"], "input_right")  # unknown region -> default
+
+
+class FontTests(unittest.TestCase):
+    """The three typefaces ship inside the app (buildozer must include ttf + licence files)."""
+    DIR = os.path.join(os.path.dirname(__file__), "..", "pa_ui", "fonts")
+
+    def test_font_files_are_real_truetype_files(self):
+        for name in ("Poppins-SemiBold.ttf", "Poppins-Regular.ttf", "Inter-Regular.ttf"):
+            with open(os.path.join(self.DIR, name), "rb") as fh:
+                self.assertEqual(fh.read(4), b"\x00\x01\x00\x00", name)
+
+    def test_licences_travel_with_the_fonts(self):
+        for name in ("OFL-Poppins.txt", "OFL-Inter.txt"):
+            with open(os.path.join(self.DIR, name), encoding="utf-8") as fh:
+                self.assertIn("SIL OPEN FONT LICENSE", fh.read().upper(), name)
+
+    def test_build_config_packages_fonts_and_uses_the_new_name(self):
+        with open(os.path.join(os.path.dirname(__file__), "..", "buildozer.spec"), encoding="utf-8") as fh:
+            spec = fh.read()
+        self.assertRegex(spec, r"source\.include_exts = .*\bttf\b")
+        self.assertIn("title = Lazey", spec)
+        self.assertIn("package.name = lazey", spec)
 
 
 class CalendarTests(unittest.TestCase):

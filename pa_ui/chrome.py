@@ -1,14 +1,14 @@
-"""Builds the main Pacsit screen from the saved config.
+"""Builds the main Lazey screen from the saved config.
 
 The app owns the content widgets (chat scroller, proposal card, text box); Chrome owns everything
 around them (header, hero, typing bar, menu) and re-arranges them whenever the configuration changes.
 
-    [ menu ]        wave-logo Pacsit        [ avatar ]
+    [ menu ]        wave-logo Lazey        [ avatar ]
                    (Your Personal AI Assistant)
     ----------------------------------------------------
     hero (orb + "Hey") while the chat is empty, else the chat
     ----------------------------------------------------
-    ( [+]  Message Pacsit...            [mic] (send) )
+    ( [+]  Message Lazey...            [mic] (send) )
 """
 from kivy.clock import Clock
 from kivy.metrics import dp
@@ -17,7 +17,7 @@ from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.widget import Widget
 
 from . import config
-from .pacsit_widgets import Brand, Drawer, Hero
+from .lazey_widgets import Brand, Drawer, Hero
 from .widgets import RoundIcon, T, backdrop, style_bare_input, surface
 
 

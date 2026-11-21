@@ -16,7 +16,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 
 from . import calendar_logic as cl
-from . import themes
+from . import fonts, themes
 from .widgets import RoundIcon, T, ThemedButton, gradient_texture, style_label, style_popup, surface
 
 
@@ -92,7 +92,7 @@ class CalendarView:
         nxt = RoundIcon(diameter=40, icon="right", kind="soft")
         prev.bind(on_release=lambda *_: self.shift(-1))
         nxt.bind(on_release=lambda *_: self.shift(1))
-        title = Label(text=cl.month_title(self.year, self.month), bold=True, font_size=sp(18))
+        title = Label(text=cl.month_title(self.year, self.month), font_name=fonts.HEADING, font_size=sp(18))
         style_label(title)
         for w in (prev, title, nxt):
             head.add_widget(w)
@@ -117,15 +117,15 @@ class CalendarView:
                 grid.add_widget(cell)
         o.add_widget(grid)
 
-        o.add_widget(style_label(Label(text=cl.day_title(self.sel), bold=True, size_hint_y=None, height=dp(30),
-                                       halign="left", font_size=sp(15)), "accent"))
+        o.add_widget(style_label(Label(text=cl.day_title(self.sel), font_name=fonts.HEADING, size_hint_y=None,
+                                       height=dp(30), halign="left", font_size=sp(15)), "accent"))
         o.children[0].bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         agenda = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
         agenda.bind(minimum_height=agenda.setter("height"))
         items = tasks.get(self.sel, [])
         if not items:
-            agenda.add_widget(style_label(Label(text="Nothing planned for this day.", size_hint_y=None, height=dp(36),
-                                                font_size=sp(14)), "muted"))
+            agenda.add_widget(style_label(Label(text="Nothing planned for this day.", font_name=fonts.SUB, size_hint_y=None,
+                                                height=dp(36), font_size=sp(14)), "muted"))
         for t in items:
             agenda.add_widget(self._row(t))
         sv = ScrollView()
@@ -148,9 +148,10 @@ class CalendarView:
         state = "calendar screen opened" if t.get("calendar") == "handed_off" else str(t.get("calendar", ""))
         when = cl.parse_time(t.get("start_iso"))
         col = BoxLayout(orientation="vertical")
-        a = style_label(Label(text=str(t.get("title", "")), halign="left", bold=True, font_size=sp(14), shorten=True,
-                              shorten_from="right"))
-        b = style_label(Label(text=(when + "  " if when else "") + state, halign="left", font_size=sp(12)), "muted")
+        a = style_label(Label(text=str(t.get("title", "")), halign="left", font_name=fonts.HEADING, font_size=sp(14),
+                              shorten=True, shorten_from="right"))
+        b = style_label(Label(text=(when + "  " if when else "") + state, halign="left", font_name=fonts.SUB,
+                              font_size=sp(12)), "muted")
         for lb in (a, b):
             lb.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
             col.add_widget(lb)

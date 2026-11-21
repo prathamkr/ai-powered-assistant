@@ -1,4 +1,4 @@
-"""The look of Pacsit: animated orb + waves, greeting, chat bubbles, brand header, slide-out menu."""
+"""The look of Lazey: animated orb + waves, greeting, chat bubbles, brand header, slide-out menu."""
 import math
 
 from kivy.clock import Clock
@@ -11,7 +11,7 @@ from kivy.uix.label import Label
 from kivy.uix.modalview import ModalView
 from kivy.uix.widget import Widget
 
-from . import config, themes
+from . import config, fonts, themes
 from .widgets import IconView, T, ThemedButton, _Surface, style_label, surface
 
 SUGGESTIONS = (("Remember ...", "Remember "), ("Note: ...", "Note: "),
@@ -89,8 +89,9 @@ class Hero(BoxLayout):
     def __init__(self, on_pick, **kw):
         super().__init__(orientation="vertical", size_hint=(1, None), spacing=dp(6), **kw)
         self.orb = Orb(size_hint_y=None, height=dp(210))
-        self.hey = Label(text="Hey", bold=True, size_hint_y=None, height=dp(52), font_size=sp(38))
-        self.ask = Label(text="What can I help you with today?", size_hint_y=None, height=dp(30), font_size=sp(17))
+        self.hey = Label(text="Hey", font_name=fonts.HEADING, size_hint_y=None, height=dp(56), font_size=sp(38))
+        self.ask = Label(text="What can I help you with today?", font_name=fonts.SUB, size_hint_y=None, height=dp(30),
+                         font_size=sp(16))
         self._tint()
         T.bind(version=self._tint)
         grid = GridLayout(cols=2, size_hint_y=None, height=dp(88), spacing=dp(8), padding=[dp(14), dp(8), dp(14), 0])
@@ -160,14 +161,15 @@ class Bubble(BoxLayout):
 
 
 class Brand(BoxLayout):
-    """Wave logo + "Pacsit" with the tagline pill underneath."""
+    """Wave logo + "Lazey" with the tagline pill underneath."""
 
     def __init__(self, align="center", tagline=True, **kw):
         super().__init__(orientation="vertical", spacing=dp(4), **kw)
         row = BoxLayout(size_hint_y=None, height=dp(34), spacing=dp(8))
         self.logo = IconView("wave", size_hint=(None, None), size=(dp(34), dp(34)))
         self.logo.pos_hint = {"center_y": 0.5}
-        self.title = Label(text=config.APP_NAME, bold=True, font_size=sp(24), size_hint_x=None, valign="middle")
+        self.title = Label(text=config.APP_NAME, font_name=fonts.HEADING, font_size=sp(24), size_hint_x=None,
+                           valign="middle")
         self.title.bind(texture_size=lambda *_: setattr(self.title, "width", self.title.texture_size[0]))
         left, right = Widget(), Widget()
         if align == "center":
@@ -179,7 +181,8 @@ class Brand(BoxLayout):
         self.pill = None
         if tagline:
             holder = BoxLayout(size_hint_y=None, height=dp(26))
-            self.pill = Label(text=config.TAGLINE, font_size=sp(12.5), size_hint=(None, 1), padding=(dp(14), 0))
+            self.pill = Label(text=config.TAGLINE, font_name=fonts.SUB, font_size=sp(12), size_hint=(None, 1),
+                              padding=(dp(14), 0))
             self.pill.bind(texture_size=lambda *_: setattr(self.pill, "width", self.pill.texture_size[0] + dp(28)))
             surface(self.pill, fill="surface", border=0.25, radius=13, tint=0.1)
             if align == "center":
