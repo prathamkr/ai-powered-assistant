@@ -14,11 +14,6 @@ from kivy.uix.widget import Widget
 from . import config, fonts, themes
 from .widgets import IconView, T, ThemedButton, _Surface, style_label, surface
 
-SUGGESTIONS = (("Remember ...", "Remember "), ("Note: ...", "Note: "),
-               ("Call mummy from sim 1", "Call mummy from sim 1"),
-               ("Show photos from yesterday", "Show photos from yesterday"))
-
-
 def _ease_out_cubic(t):
     return 1 - (1 - t) ** 3
 

@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pa_ui import calendar_logic as cl  # noqa: E402
 from pa_ui import config as C  # noqa: E402
 from pa_ui import iconset, themes  # noqa: E402
+from pa_ui import prompts as P  # noqa: E402
 
 
 def ids(cfg, region):
@@ -156,6 +157,68 @@ class ConfigTests(unittest.TestCase):
             with open(store.path, "w") as fh:
                 json.dump({"theme": "ocean", "background": "teal", "layout": {"btn_h": 60}}, fh)
             self.assertEqual(store.load(), C.set_theme(C.default_config(), "ocean"))
+
+
+class PromptTests(unittest.TestCase):
+    def test_defaults_have_no_trailing_dots_and_keep_a_space_to_type_after(self):
+        d = P.default_prompts()
+        self.assertEqual([x["label"] for x in d],
+                         ["Remember", "Note:", "Call mummy from sim 1", "Show photos from yesterday"])
+        for x in d:
+            self.assertNotIn("...", x["label"])
+        self.assertEqual(d[0]["fill"], "Remember ")     # ready to keep typing
+        self.assertEqual(d[1]["fill"], "Note: ")
+
+    def test_add_trims_and_appends(self):
+        items = P.add(P.default_prompts(), "   Call   dad  from sim 2 ")
+        self.assertEqual(items[-1], {"label": "Call dad from sim 2", "fill": "Call dad from sim 2"})
+        self.assertEqual(len(items), 5)
+
+    def test_add_rejects_bad_input_with_a_readable_message(self):
+        items = P.default_prompts()
+        for bad, word in (("", "first"), ("   ", "first"), (None, "first"), ("x" * (P.MAX_LEN + 1), "under"),
+                          ("remember", "already"), ("NOTE:", "already")):
+            with self.assertRaises(ValueError) as cm:
+                P.add(items, bad)
+            self.assertIn(word, str(cm.exception), bad)
+        full = [{"label": "p%d" % i, "fill": "p%d" % i} for i in range(P.MAX_ITEMS)]
+        with self.assertRaises(ValueError):
+            P.add(full, "one more")
+
+    def test_delete_removes_one_prompt_and_ignores_bad_indexes(self):
+        items = P.default_prompts()
+        out = P.delete(items, 1)
+        self.assertEqual([x["label"] for x in out], ["Remember", "Call mummy from sim 1", "Show photos from yesterday"])
+        self.assertEqual(len(items), 4)                       # the original list is untouched
+        for bad in (-1, 4, 99):
+            self.assertEqual(P.delete(items, bad), items)
+        self.assertEqual(P.delete(P.delete([{"label": "a", "fill": "a"}], 0), 0), [])
+
+    def test_normalize_survives_garbage_and_keeps_an_empty_list_empty(self):
+        for raw in (None, 5, "x", {"a": 1}):
+            self.assertEqual(P.normalize(raw), P.default_prompts())
+        self.assertEqual(P.normalize([]), [])
+        out = P.normalize([None, 5, {"label": ""}, {"label": "  ok  "}, {"label": "b", "fill": "B "}, {"fill": "x"}])
+        self.assertEqual(out, [{"label": "ok", "fill": "ok"}, {"label": "b", "fill": "B "}])
+
+    def test_store_roundtrip_keeps_custom_prompts_and_an_empty_list(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = P.PromptStore(os.path.join(d, "sub", "quick_prompts.json"))
+            self.assertEqual(store.load(), P.default_prompts())          # no file yet
+            items = P.add(P.delete(P.default_prompts(), 0), "Ünïcode prompt")
+            store.save(items)
+            self.assertEqual(store.load(), items)
+            store.save([])
+            self.assertEqual(store.load(), [])                           # deleting everything is remembered
+            self.assertFalse(os.path.exists(store.path + ".tmp"))
+
+    def test_store_keeps_a_damaged_file_and_falls_back_to_defaults(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = P.PromptStore(os.path.join(d, "quick_prompts.json"))
+            with open(store.path, "w") as fh:
+                fh.write("[ not json")
+            self.assertEqual(store.load(), P.default_prompts())
+            self.assertTrue(os.path.exists(store.path + ".bad"))
 
 
 class FontTests(unittest.TestCase):

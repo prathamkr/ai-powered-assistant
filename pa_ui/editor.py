@@ -1,31 +1,25 @@
 """The Theme screen: pick one of the built-in themes. The change applies to the real screen at once
 (live preview behind the pop-up) and is saved."""
 from kivy.graphics import Color, Line, Rectangle, RoundedRectangle
-from kivy.metrics import dp, sp
+from kivy.metrics import dp
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
-from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 
-from . import config, fonts, themes
-from .widgets import T, ThemedButton, gradient_texture, style_label, style_popup
+from . import config, themes
+from .widgets import T, ThemedButton, gradient_texture, style_popup
 
 
-class ThemeCard(ButtonBehavior, BoxLayout):
-    """Mini preview of a theme: gradient background, a button, the accent and two text lines."""
+class ThemeCard(ButtonBehavior, Widget):
+    """Mini preview of a theme: gradient background, a button, the accent and two text lines. No caption:
+    the preview is the label."""
 
-    def __init__(self, name, colors, selected, height=86, **kw):
-        super().__init__(orientation="vertical", size_hint_y=None, height=dp(height), padding=dp(6), **kw)
+    def __init__(self, colors, selected, height=74, **kw):
+        super().__init__(size_hint_y=None, height=dp(height), **kw)
         self.colors, self.selected = colors, selected
-        self.caption = Label(text=name, size_hint_y=None, height=dp(22), font_size=sp(12.5), shorten=True,
-                             shorten_from="right", halign="center", valign="middle",
-                             color=themes.hex_to_rgba(colors["text"]))
-        self.caption.bind(size=lambda *_: setattr(self.caption, "text_size", self.caption.size))
-        self.add_widget(Widget())
-        self.add_widget(self.caption)
         self.bind(pos=self._draw, size=self._draw)
         self._draw()
 
@@ -38,7 +32,7 @@ class ThemeCard(ButtonBehavior, BoxLayout):
             Color(1, 1, 1, 1)
             RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(12)], texture=tex)
             Color(*c["button"])
-            RoundedRectangle(pos=(x + dp(8), y + h - dp(32)), size=(w * 0.36, dp(20)), radius=[dp(10)])
+            RoundedRectangle(pos=(x + dp(10), y + h - dp(32)), size=(w * 0.36, dp(20)), radius=[dp(10)])
             Color(*c["accent"])
             RoundedRectangle(pos=(x + w * 0.36 + dp(14), y + h - dp(32)), size=(w * 0.2, dp(20)), radius=[dp(10)])
             Color(*c["user"])
@@ -67,11 +61,7 @@ class StyleEditor:
         if self.pop is not None:
             return
         outer = BoxLayout(orientation="vertical", spacing=dp(10))
-        hint = Label(text="Tap a theme to use it", size_hint_y=None, height=dp(28), font_name=fonts.SUB,
-                     font_size=sp(13), halign="center", valign="middle")
-        hint.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
-        outer.add_widget(style_label(hint, "muted"))
-        self.grid = GridLayout(cols=2, size_hint_y=None, spacing=dp(8))
+        self.grid = GridLayout(cols=2, size_hint_y=None, spacing=dp(8), padding=[0, dp(12), 0, dp(4)])
         self.grid.bind(minimum_height=self.grid.setter("height"))
         sv = ScrollView(bar_width=dp(4))
         sv.add_widget(self.grid)
@@ -86,8 +76,8 @@ class StyleEditor:
 
     def refresh(self):
         self.grid.clear_widgets()
-        for tid, (name, colors) in themes.BUILTIN.items():
-            card = ThemeCard(name, colors, tid == self.cfg["theme"])
+        for tid, (_name, colors) in themes.BUILTIN.items():
+            card = ThemeCard(colors, tid == self.cfg["theme"])
             card.bind(on_release=lambda _c, t=tid: self.pick(t))
             self.grid.add_widget(card)
 

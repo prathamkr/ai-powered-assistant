@@ -24,7 +24,8 @@ from pa_ui.calendar_view import CalendarView
 from pa_ui.chrome import Chrome
 from pa_ui.config import APP_NAME, ConfigStore
 from pa_ui.editor import StyleEditor
-from pa_ui.lazey_widgets import SUGGESTIONS, Bubble
+from pa_ui.quick_view import QuickPromptsView
+from pa_ui.lazey_widgets import Bubble
 from pa_ui.widgets import Status, T, ThemedButton, style_input, style_label, style_popup, surface
 
 
@@ -83,6 +84,7 @@ class AssistantApp(App):
         self.root_box, self._kb_now = root, 0
         self.style_editor = StyleEditor(self.chrome)
         self.calendar_view = CalendarView(self)
+        self.quick_view = QuickPromptsView(self)
         Clock.schedule_interval(self.track_keyboard, 0.15)
         return root
 
@@ -484,14 +486,8 @@ class AssistantApp(App):
         self.calendar_view.open()
 
     def show_quick(self):
-        """The + button: example prompts that fill the typing box."""
-        box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
-        box.bind(minimum_height=box.setter("height"))
-        pop = self.popup("Quick prompts", box)
-        for label, fill in SUGGESTIONS:
-            b = ThemedButton(text=label, mode="text", wide=True, halign="center", size_hint_x=1, height=dp(46))
-            b.bind(on_release=lambda _b, f=fill: (pop.dismiss(), self.chrome.fill_entry(f)))
-            box.add_widget(b)
+        """The + button: quick prompts (tap to fill the typing box; add your own; delete)."""
+        self.quick_view.open()
 
 
 if __name__ == "__main__":

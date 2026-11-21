@@ -65,6 +65,7 @@ chat did not auto-scroll after long lists; stale photo lists stayed tappable.
       config.py             saved GUI settings (theme, layout, button placement)
       iconset.py            vector icons (no font or emoji needed)
       calendar_logic.py     month grid + task grouping
+      prompts.py            quick-prompt list (add, delete, save)
       widgets.py chrome.py lazey_widgets.py editor.py calendar_view.py   Kivy parts
     buildozer.spec          APK build config
     pa/
@@ -108,8 +109,12 @@ assistant says appear in the chat.
   Voice sets when replies are spoken (after voice, always, off) and which voice (Nova, Atlas, Echo, Luna,
   Spark; each voice brings its own pitch and speed). Recognition always prefers on-device. The mic button
   listens and turns into a stop button while it does.
-- **Theme** (menu > Theme): pick one of 8 themes (Violet by default, Ocean, Emerald, Rose, Amber, Graphite,
-  Daylight, High contrast). The change shows live and is remembered. The layout, button placement and
+- **Quick prompts** (the `+` in the typing bar): tap a prompt to put it in the typing box, tap the bin to delete
+  it, or tap Add prompt to make your own (up to 30, 80 characters each, no duplicates). The list is remembered
+  in `quick_prompts.json` in the app's private folder; the starters are Remember, Note:, "Call mummy from sim 1"
+  and "Show photos from yesterday".
+- **Theme** (menu > Theme): pick one of 8 themes by tapping its preview (Violet by default, Ocean, Emerald,
+  Rose, Amber, Graphite, Daylight, High contrast). The change shows live and is remembered. The layout, button placement and
   icons are fixed (see `DEFAULT_LAYOUT` / `DEFAULT_BUTTONS` in `pa_ui/config.py`).
 - Only the theme is stored, in `ui_config.json` in the app's private folder; a damaged file is kept as `.bad`
   and the default theme is used. The theme never touches the assistant core (`pa/`).
