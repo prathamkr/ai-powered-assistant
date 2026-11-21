@@ -1,0 +1,19 @@
+# Build output
+bin/
+.buildozer/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local data and keys (never commit)
+*.db
+*.key
+*.wrapped
+dev.key
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

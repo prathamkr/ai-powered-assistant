@@ -1,0 +1,81 @@
+"""Key providers. No provider => the app refuses to open the DB (no plaintext fallback)."""
+import os
+
+
+class KeyUnavailable(Exception):
+    pass
+
+
+class KeyProvider:
+    def get_key(self) -> bytes:
+        raise NotImplementedError
+
+
+class DevFileKeyProvider(KeyProvider):
+    """INSECURE: key sits next to the DB. Dev only, must be enabled explicitly."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def get_key(self):
+        if os.environ.get("PA_ALLOW_INSECURE_DEV_KEY") != "1":
+            raise KeyUnavailable("Dev key disabled. Set PA_ALLOW_INSECURE_DEV_KEY=1 (not for real data).")
+        if os.path.exists(self.path):
+            return open(self.path, "rb").read()
+        k = os.urandom(32)
+        with open(self.path, "wb") as f:
+            f.write(k)
+        return k
+
+
+class AndroidKeystoreKeyProvider(KeyProvider):
+    """UNVERIFIED on a device. A random 32-byte data key is wrapped (AES-GCM) by a
+    non-exportable Android Keystore key; only the wrapped blob is stored on disk."""
+
+    ALIAS = "pa_master_v1"
+
+    def __init__(self, wrapped_path):
+        self.path = wrapped_path
+
+    @staticmethod
+    def _b(x):  # pyjnius byte[] -> bytes
+        return bytes(bytearray([v & 0xFF for v in x]))
+
+    def get_key(self):
+        try:
+            from jnius import autoclass
+        except Exception as e:
+            raise KeyUnavailable("Android Keystore not available: %s" % e)
+        KeyStore = autoclass("java.security.KeyStore")
+        Cipher = autoclass("javax.crypto.Cipher")
+        ks = KeyStore.getInstance("AndroidKeyStore")
+        ks.load(None)
+        if not ks.containsAlias(self.ALIAS):
+            Builder = autoclass("android.security.keystore.KeyGenParameterSpec$Builder")
+            Props = autoclass("android.security.keystore.KeyProperties")
+            KG = autoclass("javax.crypto.KeyGenerator")
+            # setBlockModes/setEncryptionPaddings are Java varargs (String...): pass the
+            # string itself. Passing a Python list makes pyjnius build String[][] and the
+            # JVM aborts the whole process with ArrayStoreException (seen on emulator).
+            spec = (Builder(self.ALIAS, Props.PURPOSE_ENCRYPT | Props.PURPOSE_DECRYPT)
+                    .setBlockModes(Props.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(Props.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256).build())
+            g = KG.getInstance(Props.KEY_ALGORITHM_AES, "AndroidKeyStore")
+            g.init(spec)
+            g.generateKey()
+        mk = ks.getKey(self.ALIAS, None)
+        c = Cipher.getInstance("AES/GCM/NoPadding")
+        if os.path.exists(self.path):
+            blob = open(self.path, "rb").read()
+            iv, ct = blob[:12], blob[12:]
+            GCM = autoclass("javax.crypto.spec.GCMParameterSpec")
+            c.init(Cipher.DECRYPT_MODE, mk, GCM(128, iv))
+            return self._b(c.doFinal(ct))
+        dek = os.urandom(32)
+        c.init(Cipher.ENCRYPT_MODE, mk)
+        iv = self._b(c.getIV())
+        ct = self._b(c.doFinal(dek))
+        with open(self.path, "wb") as f:
+            f.write(iv + ct)
+        return dek

@@ -1,0 +1,322 @@
+"""Single-screen Kivy UI for the local assistant prototype."""
+import threading
+
+from kivy.app import App
+from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.metrics import dp
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.popup import Popup
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.textinput import TextInput
+
+from pa.bootstrap import KeyUnavailable, build_assistant
+
+BG = (0.07, 0.07, 0.10, 1)
+
+
+class Msg(Label):
+    def __init__(self, text, who="bot", **kw):
+        color = {"user": (0.6, 0.8, 1, 1), "bot": (1, 1, 1, 1), "sys": (1, 0.8, 0.4, 1)}[who]
+        super().__init__(text=text, color=color, size_hint_y=None, halign="left", valign="top", **kw)
+        self.bind(width=lambda *_: setattr(self, "text_size", (self.width, None)),
+                  texture_size=lambda *_: setattr(self, "height", self.texture_size[1] + dp(8)))
+
+
+class AssistantApp(App):
+    title = "Local Assistant"
+
+    def build(self):
+        Window.clearcolor = BG
+        self.asst = None
+        self.pending = None  # (action_id, hash) of the proposal currently on screen
+        self.working = False
+
+        root = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(6))
+        bar = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        self.status = Label(text="starting...", halign="left", size_hint_x=1, font_size=dp(12))
+        self.status.bind(size=lambda *_: setattr(self.status, "text_size", self.status.size))
+        b1 = Button(text="Prefs", size_hint_x=None, width=dp(70), on_release=lambda *_: self.show_prefs())
+        b2 = Button(text="Tasks", size_hint_x=None, width=dp(70), on_release=lambda *_: self.show_tasks())
+        for w in (self.status, b1, b2):
+            bar.add_widget(w)
+
+        self.log = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
+        self.log.bind(minimum_height=self.log.setter("height"))
+        self.sv = ScrollView()
+        self.sv.add_widget(self.log)
+
+        # proposed-action card (hidden until a proposal exists)
+        self.card = BoxLayout(orientation="vertical", size_hint_y=None, height=0, opacity=0, spacing=dp(4))
+        self.card_text = Label(text="", halign="left", valign="top", size_hint_y=1)
+        self.card_text.bind(size=lambda *_: setattr(self.card_text, "text_size", self.card_text.size))
+        btns = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        self.approve_btn = Button(text="Approve", on_release=lambda *_: self.on_approve())
+        self.reject_btn = Button(text="Reject", on_release=lambda *_: self.on_reject())
+        btns.add_widget(self.approve_btn)
+        btns.add_widget(self.reject_btn)
+        self.card.add_widget(self.card_text)
+        self.card.add_widget(btns)
+
+        row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        self.entry = TextInput(multiline=False, hint_text="Likhiye...", write_tab=False)
+        self.entry.bind(on_text_validate=lambda *_: self.send())
+        self.send_btn = Button(text="Send", size_hint_x=None, width=dp(70), on_release=lambda *_: self.send())
+        row.add_widget(self.entry)
+        row.add_widget(self.send_btn)
+
+        for w in (bar, self.sv, self.card, row):
+            root.add_widget(w)
+        return root
+
+    # ---------- startup ----------
+    def on_start(self):
+        self.request_calendar_permission()
+        try:
+            self.asst = build_assistant(self.user_data_dir)
+        except KeyUnavailable as e:
+            self.set_input(False)
+            self.status.text = "BLOCKED: no encryption key"
+            self.say("Encrypted storage ke liye key nahi mili, isliye app data nahi khol sakti "
+                     "(plaintext fallback nahi hai). Detail: %s" % e, "sys")
+            return
+        except Exception as e:  # keep the UI alive and honest
+            self.set_input(False)
+            self.status.text = "ERROR"
+            self.say("Startup fail: %s: %s" % (type(e).__name__, e), "sys")
+            return
+        self.status.text = "Parser: %s" % self.asst.backend.name
+        self.say("Namaste! Likho: 'Yaad rakho ...', 'Note karo: ...', "
+                 "'Kal project par 45 minutes kaam karne ka time nikalo'.", "sys")
+
+    def request_calendar_permission(self):
+        try:
+            from android.permissions import Permission, request_permissions  # type: ignore
+
+            def cb(perms, grants):
+                # Android calls this on a non-UI thread; Kivy widgets may only be
+                # touched from the main thread (TypeError seen on emulator otherwise).
+                if not all(grants):
+                    Clock.schedule_once(lambda *_: self.say(
+                        "Calendar permission nahi mili: availability check nahi hogi "
+                        "(event ka screen phir bhi khul sakta hai).", "sys"), 0)
+            request_permissions([Permission.READ_CALENDAR], cb)
+        except Exception:
+            pass  # desktop
+
+    # ---------- helpers ----------
+    def say(self, text, who="bot"):
+        self.log.add_widget(Msg(text, who))
+        self.scroll_bottom()
+
+    def scroll_bottom(self):
+        # Scroll again after layout has settled: new widgets get their final height a
+        # frame or two later, so a single early scroll stops short (seen on phone).
+        for delay in (0.05, 0.3):
+            Clock.schedule_once(lambda *_: setattr(self.sv, "scroll_y", 0), delay)
+
+    def set_input(self, on):
+        self.entry.disabled = not on
+        self.send_btn.disabled = not on
+
+    def show_card(self, text):
+        self.card_text.text = text
+        self.card.height, self.card.opacity = dp(150), 1
+        self.approve_btn.disabled = self.reject_btn.disabled = False
+
+    def hide_card(self):
+        self.card.height, self.card.opacity = 0, 0
+        self.pending = None
+
+    def run_bg(self, fn, done):
+        """Run fn off the UI thread; call done(result_or_exception) back on it."""
+        def work():
+            try:
+                res = fn()
+            except Exception as e:
+                res = e
+            Clock.schedule_once(lambda *_: done(res), 0)
+        threading.Thread(target=work, daemon=True).start()
+
+    # ---------- chat ----------
+    def send(self):
+        text = self.entry.text.strip()
+        if not text or self.working or self.asst is None:
+            return
+        if self.pending:  # a newer message supersedes an unanswered proposal
+            self.asst.reject(self.pending[0])
+            self.hide_card()
+        self.entry.text = ""
+        self.say("> " + text, "user")
+        self.working = True
+        self.set_input(False)
+        self.status.text = "soch raha hoon..."
+        self.run_bg(lambda: self.asst.handle(text), self.on_reply)
+
+    def on_reply(self, res):
+        self.working = False
+        self.set_input(True)
+        self.status.text = "Parser: %s" % self.asst.backend.name
+        if isinstance(res, Exception):
+            self.say("Error: %s" % type(res).__name__, "sys")
+            return
+        if res.kind == "proposal":
+            self.pending = (res.action_id, res.action_hash)
+            self.show_card(res.text)
+        elif res.kind == "choose":
+            self.say(res.text)
+            self.button_list([(lbl, (lambda i=i: self.pick_contact(i))) for i, lbl in enumerate(res.options)])
+        elif res.kind == "photos":
+            self.say(res.text)
+            self.button_list([("Open  " + it["label"], (lambda pid=it["id"]: self.open_photo(pid)))
+                              for it in res.items])
+        elif res.kind == "need_permission":
+            self.say(res.text, "sys")
+            self.ask_permissions(res.permissions)
+        else:
+            self.say(res.text, "sys" if res.kind in ("unsupported", "error") else "bot")
+
+    def button_list(self, entries):
+        """Inline buttons in the chat. Each list is single-use: one tap disables all of them."""
+        box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
+        box.bind(minimum_height=box.setter("height"))
+        # A new list makes older lists stale (assistant only accepts the latest ids),
+        # so grey them out instead of letting a tap fail later.
+        for old in getattr(self, "_live_buttons", []):
+            old.disabled = True
+        btns = []
+        self._live_buttons = btns
+
+        def make(label, fn):
+            b = Button(text=label, size_hint_y=None, height=dp(44), halign="left")
+            b.bind(size=lambda w, *_: setattr(w, "text_size", (w.width - dp(16), None)))
+
+            def on(*_):
+                for x in btns:
+                    x.disabled = True
+                fn()
+            b.bind(on_release=on)
+            return b
+        for label, fn in entries:
+            b = make(label, fn)
+            btns.append(b)
+            box.add_widget(b)
+        self.log.add_widget(box)
+        self.scroll_bottom()
+
+    def pick_contact(self, i):
+        self.say("> %d" % (i + 1), "user")
+        self.run_bg(lambda: self.asst.choose_contact(i), self.on_reply)
+
+    def open_photo(self, pid):
+        self.run_bg(lambda: self.asst.open_photo(pid), self.on_result)
+
+    def ask_permissions(self, perms):
+        try:
+            from android.permissions import request_permissions  # type: ignore
+
+            def cb(_perms, grants):
+                # any(): on Android 14+ "limited photos" grants only the second permission.
+                # The adapter's permission_check() makes the real decision on the next try.
+                ok = any(grants)
+                Clock.schedule_once(lambda *_: self.say(
+                    "Permission mil gayi. Ab apni baat dobara boliye." if ok else
+                    "Permission nahi mili, isliye yeh kaam nahi ho sakta. Kuch nahi badla.", "sys"), 0)
+            request_permissions(list(perms), cb)
+        except Exception:
+            self.say("Permission maangna is device par sambhav nahi.", "sys")
+
+    def on_approve(self):
+        if not self.pending:
+            return
+        aid, h = self.pending
+        self.approve_btn.disabled = self.reject_btn.disabled = True  # block double taps at UI level
+        self.hide_card()
+        self.run_bg(lambda: self.asst.approve(aid, h), self.on_result)
+
+    def on_reject(self):
+        if not self.pending:
+            return
+        aid = self.pending[0]
+        self.hide_card()
+        self.say(self.asst.reject(aid).text)
+
+    def on_result(self, res):
+        self.say("Error: %s" % type(res).__name__ if isinstance(res, Exception) else res.text)
+
+    # ---------- saved data ----------
+    def popup(self, title, body):
+        sv = ScrollView()
+        sv.add_widget(body)
+        outer = BoxLayout(orientation="vertical", spacing=dp(6))
+        outer.add_widget(sv)
+        close = Button(text="Close", size_hint_y=None, height=dp(44))
+        outer.add_widget(close)
+        p = Popup(title=title, content=outer, size_hint=(0.95, 0.85))
+        close.bind(on_release=lambda *_: p.dismiss())
+        p.open()
+        return p
+
+    def show_prefs(self):
+        if not self.asst:
+            return
+        box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
+        box.bind(minimum_height=box.setter("height"))
+        pop = self.popup("Saved preferences", box)
+
+        def refresh():
+            box.clear_widgets()
+            prefs = self.asst.list_preferences()
+            if not prefs:
+                box.add_widget(Label(text="Koi preference saved nahi.", size_hint_y=None, height=dp(40)))
+            for p in prefs:
+                r = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(4))
+                ti = TextInput(text=p["text"], multiline=False)
+                r.add_widget(ti)
+                r.add_widget(Button(text="Save", size_hint_x=None, width=dp(60),
+                                    on_release=lambda _b, i=p["id"], t=ti: (self.asst.update_preference(i, t.text.strip()), refresh())))
+                r.add_widget(Button(text="Del", size_hint_x=None, width=dp(50),
+                                    on_release=lambda _b, i=p["id"]: (self.asst.delete_record(i), refresh())))
+                box.add_widget(r)
+            wipe = Button(text="Delete ALL my data", size_hint_y=None, height=dp(44))
+
+            def confirm(b):
+                if b.text.startswith("Delete ALL"):
+                    b.text = "Tap again to confirm"
+                else:
+                    self.asst.delete_all_data()
+                    self.say("Saara data delete ho gaya.", "sys")
+                    pop.dismiss()
+            wipe.bind(on_release=confirm)
+            box.add_widget(wipe)
+        refresh()
+
+    def show_tasks(self):
+        if not self.asst:
+            return
+        box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
+        box.bind(minimum_height=box.setter("height"))
+        self.popup("Tasks (in-app)", box)
+
+        def refresh():
+            box.clear_widgets()
+            tasks = self.asst.list_tasks()
+            if not tasks:
+                box.add_widget(Label(text="Koi task nahi.", size_hint_y=None, height=dp(40)))
+            for t in tasks:
+                r = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(4))
+                state = "calendar screen opened" if t.get("calendar") == "handed_off" else t.get("calendar", "")
+                lb = Label(text="%s\n%s [%s]" % (t["title"], t["start_iso"][:16].replace("T", " "), state),
+                           halign="left")
+                lb.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+                r.add_widget(lb)
+                r.add_widget(Button(text="Del", size_hint_x=None, width=dp(50),
+                                    on_release=lambda _b, i=t["id"]: (self.asst.delete_record(i), refresh())))
+                box.add_widget(r)
+        refresh()
+
+
+if __name__ == "__main__":
+    AssistantApp().run()
