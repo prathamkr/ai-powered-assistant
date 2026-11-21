@@ -5,7 +5,7 @@ package.domain = org.pa
 source.dir = .
 source.include_exts = py
 source.exclude_dirs = tests, docs, bin, .buildozer, __pycache__
-version = 0.2
+version = 0.3
 # pycryptodome (not `cryptography`): has a python-for-android recipe and no Rust needed.
 # No version pins: use the versions python-for-android tested together.
 # (kivy==2.3.0 does NOT compile against the Python 3.14 that p4a v2026.05.09 bundles.)
