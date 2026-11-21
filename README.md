@@ -90,6 +90,9 @@ No model or dependency is downloaded at runtime.
 ## More commands
 - `rahul ko call karo` / `mummy ko phone lagao` / `call 9876543210`
 - `rahul 9876 ko sim 2 se call karo` / `rahul ko airtel se call karo` / `dusri sim se mummy ko call karo`
+- `call neha whose number starts with 7012 from sim 1` / `can you call mummy from second sim` / `call rahul via airtel`
+- If the full name matches no contact, each word is tried alone; such partial matches always
+  show a list to choose from and are **never** dialled directly.
 - `kal ki photos dikhao` / `aaj ki photos` / `pichle hafte ke screenshots dikhao` / `camera ki photos`
 
 ## Demo checklist (acceptance scenario)

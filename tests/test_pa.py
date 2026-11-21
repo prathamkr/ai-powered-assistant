@@ -171,6 +171,19 @@ class CallsAndPhotosParsing(unittest.TestCase):
             "rahul sharma jiska number 9811 se shuru hota hai usko airtel se call karo":
                 {"name": "rahul sharma", "prefix": "9811", "sim": "airtel"},
             "call 98765 43210 sim 1 se": {"number": "9876543210", "sim": "1"},
+            # natural English (reported by user: second form used to fail)
+            "call neha 7012 from sim 1": {"name": "neha", "prefix": "7012", "sim": "1"},
+            "call neha whose number starts from 7012 from sim 1":
+                {"name": "neha", "prefix": "7012", "sim": "1"},
+            "call neha whose number starts with 7012 using sim 1":
+                {"name": "neha", "prefix": "7012", "sim": "1"},
+            "please call neha, her number begins with 7012, from sim 2":
+                {"name": "neha", "prefix": "7012", "sim": "2"},
+            "call rahul sharma whose number is starting with 98 11 via airtel":
+                {"name": "rahul sharma", "prefix": "9811", "sim": "airtel"},
+            "can you call mummy from second sim": {"name": "mummy", "sim": "2"},
+            "neha ko call karo jiska number 7012 se start hota hai sim 1 se":
+                {"name": "neha", "prefix": "7012", "sim": "1"},
         }
         for text, want in cases.items():
             i = self.v(text)
@@ -216,6 +229,38 @@ class Calls(unittest.TestCase):
         self.assertEqual(self.phone.calls[-1]["name"], "Rahul Verma")
         self.a.handle("rahul 9876 ko call karo")  # stored as +91 98765...; country code ignored
         self.assertEqual(self.phone.calls[-1]["name"], "Rahul Sharma")
+
+    def test_spoken_name_is_taken_exactly(self):
+        book = [{"name": "Neha", "number": "9000000011"},
+                {"name": "Neha 2", "number": "9000000022"},
+                {"name": "Neha Office", "number": "9000000033"}]
+        phone = FakePhone()
+        a = self.mk(contacts=FakeContacts(book), phone=phone)
+        for text, who in (("neha ko call karo", "Neha"), ("call neha", "Neha"),
+                          ("neha 2 ko call karo", "Neha 2"), ("call neha 2 from sim 1", "Neha 2"),
+                          ("neha office ko call karo", "Neha Office"),
+                          ("call Neha Office", "Neha Office")):
+            r = a.handle(text)
+            self.assertEqual(phone.calls[-1]["name"], who, "%s -> %s" % (text, r.text))
+        self.assertEqual(len(phone.calls), 6)
+
+    def test_name_digit_vs_prefix(self):
+        P, d = ConstrainedParser(), date(2026, 11, 20)
+        e = validate(P.parse("neha 2 7012 se shuru wale ko call karo", d), d).entities
+        self.assertEqual((e.get("name"), e.get("prefix")), ("neha 2", "7012"))
+        e = validate(P.parse("call 98 76 54 32 10", d), d).entities
+        self.assertEqual((e.get("name"), e.get("number")), (None, "9876543210"))
+
+    def test_natural_sentence_calls_right_contact(self):
+        self.a.handle("call rahul whose number starts with 9811")
+        self.assertEqual(self.phone.calls[-1]["name"], "Rahul Verma")
+
+    def test_partial_name_match_asks_never_dials(self):
+        # 'rahul gupta' does not exist; word fallback finds Rahul Sharma/Verma -> must ask
+        r = self.a.handle("call rahul gupta 9876")
+        self.assertEqual(r.kind, "choose")
+        self.assertEqual(len(r.options), 1)
+        self.assertEqual(self.phone.calls, [])
 
     def test_prefix_without_match_calls_nobody(self):
         r = self.a.handle("rahul 7000 ko call karo")

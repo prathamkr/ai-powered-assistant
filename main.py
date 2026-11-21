@@ -30,6 +30,12 @@ class AssistantApp(App):
 
     def build(self):
         Window.clearcolor = BG
+        # Keyboard handling: do NOT pan the window ("below_target" pushed the header and the
+        # chat history off the top). Instead the bottom padding grows to the keyboard height
+        # (see track_keyboard), so only the chat area shrinks and the input sits on top of
+        # the keyboard while the header and history stay where they are.
+        Window.softinput_mode = ""
+        self._kb_base = 0   # visible-frame bottom (px) with the keyboard closed
         self.asst = None
         self.pending = None  # (action_id, hash) of the proposal currently on screen
         self.working = False
@@ -69,7 +75,35 @@ class AssistantApp(App):
 
         for w in (bar, self.sv, self.card, row):
             root.add_widget(w)
+        self.root_box, self._kb_now = root, 0
+        Clock.schedule_interval(self.track_keyboard, 0.15)
         return root
+
+    def keyboard_px(self):
+        """On-screen keyboard height in pixels (0 when closed or not on Android).
+        Measured from the window's visible frame: its bottom edge moves up by the keyboard
+        height. The largest bottom seen is the keyboard-closed baseline."""
+        try:
+            from jnius import autoclass  # type: ignore
+            from android import mActivity  # type: ignore
+        except Exception:
+            return 0
+        r = autoclass("android.graphics.Rect")()
+        mActivity.getWindow().getDecorView().getWindowVisibleDisplayFrame(r)
+        self._kb_base = max(self._kb_base, r.bottom)
+        kb = self._kb_base - r.bottom
+        return kb if kb > dp(80) else 0  # ignore small jitters (nav bar changes)
+
+    def track_keyboard(self, *_):
+        try:
+            kb = self.keyboard_px()
+        except Exception:
+            return
+        if abs(self._kb_now - kb) > 1:
+            self._kb_now = kb
+            # bottom padding (not an extra widget, which added layout spacing when closed)
+            self.root_box.padding = [dp(8), dp(8), dp(8), dp(8) + kb]
+            self.scroll_bottom()  # keep the newest message visible above the input
 
     # ---------- startup ----------
     def on_start(self):

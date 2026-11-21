@@ -11,6 +11,11 @@ from .inference import UNSUPPORTED, validate
 RANGE_LABEL = {"today": "aaj", "yesterday": "kal", "week": "pichle 7 din", "month": "pichle 30 din"}
 
 
+def _norm_name(s):
+    """'Neha  Office.' -> 'neha office' (case, spaces and punctuation ignored)."""
+    return " ".join(re.findall(r"\w+", (s or "").lower()))
+
+
 def _national(num):
     """Digits of a phone number without +91 / leading 0, for prefix matching."""
     d = re.sub(r"\D", "", num or "")
@@ -180,22 +185,48 @@ class Assistant:
             return self._direct_call(it.entities["number"], it.entities["number"], sim)
         name, prefix = it.entities["name"], it.entities.get("prefix")
         try:
-            matches = self.contacts.search(name)
+            matches, exact = self._match_contacts(name, prefix)
         except Exception as ex:
             return Response("error", "Contacts padh nahi paya: %s" % type(ex).__name__)
-        if prefix:
-            matches = [m for m in matches if _national(m["number"]).startswith(prefix)]
         self.store.audit("-", "contact_lookup", "n/a", "done", "matches=%d" % len(matches))
         who = "'%s'%s" % (name, (" (number %s... se shuru)" % prefix) if prefix else "")
         if not matches:
             return Response("info", "%s naam ka koi contact nahi mila. Kuch call nahi hua." % who)
-        if len(matches) == 1:
+        if len(matches) == 1 and exact:
             return self._direct_call(matches[0]["name"], matches[0]["number"], sim)
         self._choices = (matches[:5], sim)
         labels = ["%d. %s (%s)" % (i + 1, m["name"], m["number"]) for i, m in enumerate(matches[:5])]
+        if not exact:
+            return Response("choose", "%s poora naam nahi mila, yeh milte-julte contacts hain. "
+                            "Kisko call karna hai?" % who, options=labels)
         hint = "" if prefix else " (Agli baar number ke shuru ke 4 ank bhi bol sakte hain.)"
         return Response("choose", "%s ke %d contacts mile. Kisko call karna hai?%s" % (who, len(matches), hint),
                         options=labels)
+
+    def _match_contacts(self, name, prefix):
+        """Full name first. If that finds nothing (e.g. the sentence left an extra word like
+        'neha whose'), try each word alone, longest first, and keep the first word that
+        matches. Words under 3 letters are skipped so 'me'/'ji' never match everyone."""
+        def find(q):
+            ms = self.contacts.search(q)
+            if prefix:
+                ms = [m for m in ms if _national(m["number"]).startswith(prefix)]
+            return ms
+        matches = find(name)
+        # Say exactly as much name as you mean: "neha" -> only the contact named exactly
+        # "Neha", not "Neha 2" / "Neha Office". Longer names are only offered when no
+        # contact has exactly the spoken name.
+        exact = [m for m in matches if _norm_name(m["name"]) == _norm_name(name)]
+        if exact:
+            return exact, True
+        words = name.split()
+        if matches or len(words) < 2:
+            return matches, True
+        for w in sorted({w for w in words if len(w) >= 3}, key=len, reverse=True):
+            matches = find(w)
+            if matches:
+                return matches, False  # partial match: caller must ask, never dial directly
+        return [], True
 
     def _call_permissions_missing(self, ent):
         missing = []

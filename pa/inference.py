@@ -25,7 +25,16 @@ FIELDS = {
 CALL_FILLERS = set("ko to please plz karo kar do de dena lagao laga call dial phone fone ek zara jara "
                    "kardo krdo mujhe se baat karni hai karwa karwao make a the abhi sim wale wali wala "
                    "number no jiska jiske jo starting start shuru hota hoti from using via "
-                   "usko unko isko inko use unhe inhe usse unse".split())
+                   "usko unko isko inko use unhe inhe usse unse "
+                   # English glue words ("call neha whose number starts with 7012 from sim 1")
+                   "whose who which that his her their its starts started starting begins begin "
+                   "beginning with digits digit and for me my can could you u pls kindly on in is "
+                   "ka ki ke hai h hota hoti wo woh uska uski unka unki".split())
+# "whose number starts with 7012", "number starting 7012", "jiska number 7012 se shuru hota hai"
+PREFIX_PHRASE = re.compile(
+    r"\b(?:(?:whose|jiska|jiske|jinka|uska|unka)\s+)?(?:(?:phone|mobile)\s+)?(?:number|no\.?|num)?\s*(?:is\s+)?"
+    r"(?:starts?|starting|begins?|beginning|shuru)\s*(?:hota\s+|hoti\s+)?(?:from|with|by|se|at)?\s*"
+    r"((?:\d[\s\-]?){3,6})(?!\d)")
 
 
 def _parse_call(t, low):
@@ -42,16 +51,39 @@ def _parse_call(t, low):
         else:
             m = re.search(r"\b(%s)\s+(?:(?:wali|wale|ki|ke)\s+)?(?:sim\s+)?(?:se|from|using|via)\b"
                           % "|".join(CARRIERS), rest)
+            if not m:  # English order: "via airtel", "from jio sim", "using vi"
+                m = re.search(r"\b(?:from|using|via|through|on|with)\s+(?:my\s+|the\s+)?(%s)\b(?:\s+sim\b)?"
+                              % "|".join(CARRIERS), rest)
             if m:
                 ent["sim"] = m.group(1)
     if m:
         rest = rest[:m.start()] + " " + rest[m.end():]
-    digits = re.sub(r"\D", "", rest)
+    p = PREFIX_PHRASE.search(rest)
+    if p:
+        ent["prefix"] = re.sub(r"\D", "", p.group(1))
+        rest = rest[:p.start()] + " " + rest[p.end():]
+    # Walk the words. A 1-2 digit number right after a name word belongs to the name
+    # ("neha 2" is a contact called "Neha 2"), unless more digits follow
+    # ("rahul 98 11 ..." is a spaced phone number: another short group follows).
+    # "neha 2 7012" = name "neha 2" + prefix 7012. Other digits form the number/prefix.
+    toks = re.findall(r"\+?\d+|[^\W\d_][\w.]*", rest)
+    name, digs = [], []
+    for i, tk in enumerate(toks):
+        if tk[0] in "+0123456789":
+            nxt = toks[i + 1] if i + 1 < len(toks) else ""
+            more = nxt[:1] in tuple("+0123456789") and len(nxt) <= 2 if nxt else False
+            if len(tk) <= 2 and name and i and toks[i - 1] == name[-1] and not more:
+                name.append(tk)
+            else:
+                digs.append(tk)
+        elif tk not in CALL_FILLERS:
+            name.append(tk)
+    digits = "" if p else re.sub(r"\D", "", "".join(digs))
     if len(digits) >= 7:
-        ent["number"] = re.sub(r"[^\d+]", "", rest)
+        ent["number"] = "".join(digs)
     elif 3 <= len(digits) <= 6:
         ent["prefix"] = digits
-    ent["name"] = " ".join(w for w in re.findall(r"[^\W\d_][\w.]*", rest) if w not in CALL_FILLERS)
+    ent["name"] = " ".join(name)
     return ent
 PHOTO_WORDS = r"photos?|pics?|pictures?|tasveer|tasvir|images?|gallery|screenshots?"
 PHOTO_SKIP = set("ki ke wali wale of mere meri my aaj kal today yesterday pichle pichhle last is this "
