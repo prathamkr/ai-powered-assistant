@@ -1,0 +1,11 @@
+Local Assistant
+
+This product includes software derived from PokeClaw
+  PokeClaw
+  Copyright 2026 agents.io
+  This product includes software developed at agents.io (https://github.com/agents-io).
+  Licensed under the Apache License, Version 2.0 (see LICENSES/Apache-2.0-PokeClaw.txt).
+
+Derived parts (rewritten in Python, changed as described in docs/THIRD_PARTY.md):
+  pa/adapters/device_info.py   from PokeClaw tool/impl/GetDeviceInfoTool.java
+  pa/everyday.py               design of PipelineRouter.kt, skill/Skill.kt, knowledge/KbAddTodoTool.kt

@@ -2,8 +2,13 @@
 import os
 from datetime import datetime
 
+from .adapters.alarms import AndroidAlarmsAdapter
+from .adapters.apps import AndroidAppsAdapter
 from .adapters.calendar import ANDROID, AndroidCalendarAdapter
 from .adapters.contacts import AndroidContactsAdapter
+from .adapters.daily_android import AndroidDailyAdapter
+from .adapters.device_info import AndroidDeviceInfoAdapter
+from .adapters.messages import AndroidMessagesAdapter
 from .adapters.phone import AndroidPhoneAdapter
 from .adapters.photos import AndroidPhotosAdapter
 from .assistant import Assistant
@@ -25,4 +30,6 @@ def build_assistant(data_dir):
     # timezone-aware, recomputed on each call so DST/zone changes are honoured
     return Assistant(store, load_backend(None), AndroidCalendarAdapter(), lambda: datetime.now().astimezone(),
                      contacts=AndroidContactsAdapter(), phone=AndroidPhoneAdapter(),
-                     photos=AndroidPhotosAdapter())
+                     photos=AndroidPhotosAdapter(), apps=AndroidAppsAdapter(), daily=AndroidDailyAdapter(),
+                     messages=AndroidMessagesAdapter(), alarms=AndroidAlarmsAdapter(),
+                     device=AndroidDeviceInfoAdapter())

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="autosend_label">Lazey auto-send</string>
+    <string name="autosend_description">Presses Send in WhatsApp for messages you asked Lazey to send. It acts only for about 20 seconds after the app opened a chat, only if the typed text is exactly your message, and it reads nothing else. Turn it off any time here.</string>
+</resources>

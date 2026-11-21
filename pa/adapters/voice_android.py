@@ -106,6 +106,31 @@ class _InitListener(PythonJavaClass):
         self.cb(int(status))
 
 
+def _strings(jlist):
+    if jlist is None:
+        return []
+    return [str(jlist.get(i)) for i in range(jlist.size())]
+
+
+class _SupportCallback(PythonJavaClass):
+    """android.speech.RecognitionSupportCallback (Android 13+): which on-device languages exist."""
+    __javainterfaces__ = ["android/speech/RecognitionSupportCallback"]
+    __javacontext__ = "app"
+
+    def __init__(self, cb):
+        super().__init__()
+        self.cb = cb
+
+    @java_method("(Landroid/speech/RecognitionSupport;)V")
+    def onSupportResult(self, s):
+        self.cb(_strings(s.getInstalledOnDeviceLanguages()), _strings(s.getPendingOnDeviceLanguages()),
+                _strings(s.getSupportedOnDeviceLanguages()), None)
+
+    @java_method("(I)V")
+    def onError(self, code):
+        self.cb([], [], [], int(code))
+
+
 class AndroidVoice:
     """on_event(kind, value): kind in ready | partial | processing | final | nospeech | error | idle."""
 
@@ -120,6 +145,9 @@ class AndroidVoice:
         self._plan = None                 # (on_device, language, prefer_offline) in use
         self._good_plan = None            # last plan that produced a result on this phone
         self._queue = []
+        self.offline_lang = None          # language whose offline pack is installed (from check_offline)
+        self._support_cb = None
+        self._helper_sr = None            # on-device recognizer used for check/download
         self._tts = None
         self._tts_ready = False
         self._tts_failed = False
@@ -138,29 +166,36 @@ class AndroidVoice:
     def recognizer_label(self):
         plan = self._plan or self._good_plan or (self._plans(self._prefer_offline) or [None])[0]
         if plan is None:
-            return "not available"
+            return "offline speech not installed" if self._prefer_offline else "not available"
         on_device, lang, _offline = plan
-        where = "on-device" if on_device else "phone recognizer (may use internet)"
+        where = "offline, on-device" if on_device else "phone recognizer (may use internet)"
         return "%s, %s" % (where, lang or "phone language")
 
-    def _plans(self, prefer_offline):
+    def _plans(self, offline_only):
         """Ways to start the recognizer, best first: (on_device, language, prefer_offline).
-        Phones differ in which language packs exist (the test phone refused en-IN with
-        error 13), so later entries fall back to en-US and then to the phone's own language."""
+
+        offline_only=True (default): ONLY the on-device recognizer (createOnDeviceSpeechRecognizer
+        guarantees audio stays on the phone). Its language pack must be installed once
+        (download_offline). Otherwise: on-device first, then the normal recognizer, which may
+        use Google's servers. Phones differ in packs (the test phone refused en-IN with error 13),
+        so later entries try en-US and the phone's own language."""
         plans = []
-        if prefer_offline and self._can_on_device():
+        if offline_only:
+            if self._can_on_device(ignore_failed=True):
+                for lang in dict.fromkeys(x for x in (self.offline_lang, V.LANGUAGE, FALLBACK_LANGUAGE) if x):
+                    plans.append((True, lang, True))
+            return plans
+        if self._can_on_device():
             plans.append((True, V.LANGUAGE, True))
-        plans.append((False, V.LANGUAGE, prefer_offline))
-        if prefer_offline:
-            plans.append((False, V.LANGUAGE, False))
-        plans += [(False, FALLBACK_LANGUAGE, prefer_offline), (False, None, prefer_offline)]
+        plans += [(False, V.LANGUAGE, True), (False, V.LANGUAGE, False), (False, FALLBACK_LANGUAGE, False),
+                  (False, None, False)]
         if self._good_plan in plans:  # what worked last time goes first
             plans.remove(self._good_plan)
             plans.insert(0, self._good_plan)
         return plans
 
-    def _can_on_device(self):
-        if self._on_device_failed or au.sdk_int() < 33:
+    def _can_on_device(self, ignore_failed=False):
+        if (self._on_device_failed and not ignore_failed) or au.sdk_int() < 33:
             return False
         try:
             SR = au.autoclass("android.speech.SpeechRecognizer")
@@ -186,9 +221,12 @@ class AndroidVoice:
         RI = au.autoclass("android.speech.RecognizerIntent")
         if not self._queue:
             self._plan = None
-            self._event("error", "Speech recognition is not available on this phone for %s or %s. "
-                                 "Install an offline speech pack in the phone settings (Google > "
-                                 "Speech) or type instead." % (V.LANGUAGE, FALLBACK_LANGUAGE))
+            if self._prefer_offline:
+                self._event("error", "Offline speech is not installed yet. Open Voice and tap 'Download "
+                                     "offline speech' (needs internet once), or type instead.")
+            else:
+                self._event("error", "Speech recognition is not available on this phone for %s or %s. "
+                                     "Type instead." % (V.LANGUAGE, FALLBACK_LANGUAGE))
             return
         on_device, lang, offline = self._plan = self._queue.pop(0)
         self.on_device = on_device
@@ -255,8 +293,12 @@ class AndroidVoice:
 
     def _on_error(self, code):
         # Called on the UI thread (recognizer callbacks run on the main looper).
-        if self._listening and (code in LANG_ERRORS or (self.on_device and code == 5)):
-            if self.on_device:
+        # On the test phone, with internet off, the on-device recognizer answered en-IN (no pack
+        # installed) with a NETWORK error, not "language unavailable". In offline mode that also
+        # means "try the next installed language" (en-US was installed and works offline).
+        offline_retry = self.on_device and self._prefer_offline and code in NETWORK_ERRORS
+        if self._listening and (code in LANG_ERRORS or (self.on_device and code == 5) or offline_retry):
+            if self.on_device and not self._prefer_offline:
                 self._on_device_failed = True
             if self._plan == self._good_plan:
                 self._good_plan = None
@@ -276,6 +318,67 @@ class AndroidVoice:
             self._event("idle", None)  # we cancelled it ourselves
         else:
             self._event("error", "Speech recognition failed: %s." % ERROR_TEXT.get(code, "error %d" % code))
+
+    # ---------- offline speech pack ----------
+    def _lang_intent(self, lang):
+        RI = au.autoclass("android.speech.RecognizerIntent")
+        b = au.autoclass("android.os.Bundle")()
+        b.putString(RI.EXTRA_LANGUAGE_MODEL, RI.LANGUAGE_MODEL_FREE_FORM)
+        b.putString(RI.EXTRA_LANGUAGE, lang)
+        it = au.autoclass("android.content.Intent")(RI.ACTION_RECOGNIZE_SPEECH)
+        it.putExtras(b)
+        return it
+
+    def _helper(self):
+        SR = au.autoclass("android.speech.SpeechRecognizer")
+        if self._helper_sr is None:
+            self._helper_sr = SR.createOnDeviceSpeechRecognizer(au.mActivity)
+        return self._helper_sr
+
+    @run_on_ui_thread
+    def check_offline(self):
+        """Ask the on-device recognizer which languages are installed / can be downloaded.
+        Result arrives as event 'offline_status' with a dict."""
+        if not au.ANDROID or au.sdk_int() < 33 or not self._can_on_device(ignore_failed=True):
+            self._event("offline_status", {"available": False})
+            return
+        try:
+            self._support_cb = _SupportCallback(self._on_support)
+            self._helper().checkRecognitionSupport(self._lang_intent(V.LANGUAGE), au.mActivity.getMainExecutor(),
+                                                   self._support_cb)
+        except Exception as ex:
+            self._event("offline_status", {"available": False, "error": type(ex).__name__})
+
+    def _on_support(self, installed, pending, supported, error):
+        def has(langs, want):
+            return next((x for x in langs if x.lower() == want.lower()), None)
+        st = {"available": error is None, "installed": installed, "pending": pending, "supported": supported,
+              "error": error}
+        self.offline_lang = has(installed, V.LANGUAGE) or has(installed, FALLBACK_LANGUAGE)
+        st["ready"] = self.offline_lang
+        # what to download: Indian English if the phone offers it, else US English
+        st["download"] = None if self.offline_lang else (
+            has(supported, V.LANGUAGE) or has(supported, FALLBACK_LANGUAGE)
+            or (V.LANGUAGE if not supported else None))
+        st["downloading"] = bool(has(pending, V.LANGUAGE) or has(pending, FALLBACK_LANGUAGE))
+        # en-US works offline but Indian English understands Hinglish names better: offer it too
+        st["better"] = (has(supported, V.LANGUAGE)
+                        if self.offline_lang and self.offline_lang.lower() != V.LANGUAGE.lower()
+                        and not has(pending, V.LANGUAGE) else None)
+        if self.offline_lang:
+            self._on_device_failed = False
+        self._event("offline_status", st)
+
+    @run_on_ui_thread
+    def download_offline(self, lang):
+        """Ask Google's on-device recognizer to download the language pack (internet needed once).
+        The download runs in the system; check_offline() shows when it is done."""
+        try:
+            self._helper().triggerModelDownload(self._lang_intent(lang))
+            self._event("info", "Downloading offline speech for %s. This needs internet once and can take a "
+                                "few minutes. Open Voice again to see when it is ready." % lang)
+        except Exception as ex:
+            self._event("error", "Could not start the offline speech download: %s" % type(ex).__name__)
 
     # ---------- speaking ----------
     def _ensure_tts(self, then):

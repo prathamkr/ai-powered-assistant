@@ -56,6 +56,9 @@ class VoiceSettings:
     voice_index: int = 0
     speak_mode: str = "voice"
     prefer_offline: bool = True
+    # WhatsApp auto-send was on once. Android switches accessibility services off when the app
+    # is updated, so on start the app reminds the user if it is off again.
+    auto_send_wanted: bool = False
 
     def use_profile(self, pid):
         p = profile(pid)
@@ -75,6 +78,7 @@ class VoiceSettings:
             pass
         d.speak_mode = self.speak_mode if self.speak_mode in SPEAK_MODES else "voice"
         d.prefer_offline = bool(self.prefer_offline)
+        d.auto_send_wanted = bool(self.auto_send_wanted)
         return d
 
 

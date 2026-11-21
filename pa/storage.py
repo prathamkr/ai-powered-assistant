@@ -47,6 +47,29 @@ class Store:
                                    (kind,)).fetchall()
         return [dict(json.loads(self.c.dec(d, self._aad(kind, i))), id=i, created_at=t) for i, d, t in rows]
 
+    def recent(self, kind, limit):
+        """The newest `limit` records of a kind, oldest first."""
+        with self.lock:
+            rows = self.db.execute("SELECT id,data,created_at FROM records WHERE kind=? "
+                                   "ORDER BY created_at DESC, rowid DESC LIMIT ?", (kind, int(limit))).fetchall()
+        return [dict(json.loads(self.c.dec(d, self._aad(kind, i))), id=i, created_at=t) for i, d, t in reversed(rows)]
+
+    def trim(self, kind, keep):
+        """Delete all but the newest `keep` records of a kind. Returns how many were deleted."""
+        with self.lock:
+            n = self.db.execute("DELETE FROM records WHERE kind=? AND id NOT IN (SELECT id FROM records "
+                                "WHERE kind=? ORDER BY created_at DESC, rowid DESC LIMIT ?)",
+                                (kind, kind, int(keep))).rowcount
+            self.db.commit()
+        return n
+
+    def delete_kind(self, kind):
+        with self.lock:
+            n = self.db.execute("DELETE FROM records WHERE kind=?", (kind,)).rowcount
+            self.db.execute("DELETE FROM vectors WHERE kind=?", (kind,))
+            self.db.commit()
+        return n
+
     def get(self, rid):
         with self.lock:
             r = self.db.execute("SELECT kind FROM records WHERE id=?", (rid,)).fetchone()

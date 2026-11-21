@@ -20,11 +20,16 @@ RECORD_AUDIO = "android.permission.RECORD_AUDIO"
 def granted(perm):
     if not ANDROID:
         return False
+    # Context.checkSelfPermission is a plain framework call: reliable from any thread
+    # (on the phone the android.permissions helper once reported a granted permission as missing).
     try:
-        from android.permissions import check_permission  # type: ignore
-        return bool(check_permission(perm))
+        return int(mActivity.checkSelfPermission(perm)) == 0  # PackageManager.PERMISSION_GRANTED
     except Exception:
-        return False
+        try:
+            from android.permissions import check_permission  # type: ignore
+            return bool(check_permission(perm))
+        except Exception:
+            return False
 
 
 def sdk_int():

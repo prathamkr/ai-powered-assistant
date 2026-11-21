@@ -705,5 +705,736 @@ class Voice(unittest.TestCase):
         self.assertEqual(events, [])
 
 
+class FakeApps(Adapter):  # TEST-ONLY mock
+    name = "apps"
+
+    def __init__(self, apps):
+        self.apps, self.opened = apps, []
+
+    def capability_check(self):
+        return True
+
+    def permission_check(self):
+        return "not_required"
+
+    def list_apps(self):
+        return self.apps
+
+    def open(self, package):
+        self.opened.append(package)
+        return Result("handed_off", "app opened")
+
+
+APPS = [{"label": "WhatsApp", "package": "com.whatsapp"},
+        {"label": "WhatsApp Business", "package": "com.whatsapp.w4b"},
+        {"label": "YouTube", "package": "com.google.android.youtube"},
+        {"label": "YouTube Music", "package": "com.google.android.apps.youtube.music"},
+        {"label": "Instagram", "package": "com.instagram.android"},
+        {"label": "Camera", "package": "com.android.camera"},
+        {"label": "Phone", "package": "com.android.dialer"},
+        {"label": "Play Store", "package": "com.android.vending"}]
+
+
+class OpenApps(unittest.TestCase):
+    P, D = ConstrainedParser(), date(2026, 11, 21)
+
+    def app_of(self, text):
+        i = validate(self.P.parse(text, self.D), self.D)
+        return i.entities.get("app") if i.intent == "open_app" else ("<%s>" % i.intent)
+
+    def test_open_phrases(self):
+        for text, app in (("open whatsapp", "whatsapp"), ("Open WhatsApp", "whatsapp"),
+                          ("whatsapp kholo", "whatsapp"), ("youtube open karo", "youtube"),
+                          ("please open the camera app", "camera"), ("launch play store", "play store"),
+                          ("insta chalao", "insta"), ("mera whatsapp khol do", "whatsapp"),
+                          ("open phone", "phone"), ("gallery kholo", "gallery")):
+            self.assertEqual(self.app_of(text), app, text)
+
+    def test_other_commands_are_not_apps(self):
+        self.assertEqual(self.app_of("kal ki photos kholo"), "<find_photos>")
+        self.assertEqual(self.app_of("rahul ko call karo"), "<call_contact>")
+        self.assertEqual(self.app_of("whatsapp pe message bhejo"), "<send_message>")
+        self.assertEqual(self.app_of("Kal project par 45 minutes kaam karne ka time nikalo."), "<schedule_work>")
+        self.assertEqual(self.app_of("open 98765"), "<unknown>")
+
+    def test_matching(self):
+        from pa.assistant import match_apps
+        cases = {"whatsapp": (["WhatsApp"], True), "youtube": (["YouTube"], True),
+                 "insta": (["Instagram"], True), "watsapp": (["WhatsApp"], True),
+                 "play store": (["Play Store"], True), "you tube": (["YouTube"], True),
+                 "whatsapp b": (["WhatsApp Business"], True), "zzzz": ([], True)}
+        for q, (labels, sure) in cases.items():
+            m, s = match_apps(q, APPS)
+            self.assertEqual(([a["label"] for a in m], s), (labels, sure), q)
+        m, s = match_apps("tube", APPS)
+        self.assertEqual((len(m), s), (2, False))
+
+    def test_open_flow(self):
+        apps = FakeApps(APPS)
+        a, store, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), apps=apps)
+        r = a.handle("open whatsapp")
+        self.assertEqual((r.text, apps.opened), ("Opening WhatsApp.", ["com.whatsapp"]))
+        r = a.handle("open tube")
+        self.assertEqual(r.kind, "choose")
+        r = a.handle("second one")
+        self.assertEqual((r.text, apps.opened[-1]), ("Opening YouTube Music.", "com.google.android.apps.youtube.music"))
+        r = a.handle("open snapchat")
+        self.assertIn("No app called 'snapchat'", r.text)
+        self.assertEqual(len(apps.opened), 2)
+        self.assertNotIn("whatsapp", str(store.audit_rows()).lower())  # audit has no app names
+
+    def test_unsupported_without_adapter(self):
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"))
+        self.assertEqual(a.handle("open whatsapp").kind, "unsupported")
+
+
+class FakeDaily(Adapter):  # TEST-ONLY mock of the Java alarm side
+    name = "daily_message"
+
+    def __init__(self, missing=()):
+        self.saved, self.missing = {}, list(missing)
+
+    def capability_check(self):
+        return True
+
+    def permission_check(self):
+        return "not_required"
+
+    def missing_permissions(self, channel):
+        return [p for p in self.missing if channel == "sms" or "SMS" not in p]
+
+    def validate(self, p):
+        from pa.adapters.daily_android import validate_payload
+        return validate_payload(p)
+
+    def preview(self, p):
+        from pa.adapters.daily_android import preview_payload
+        return preview_payload(p)
+
+    def execute(self, p):
+        self.saved[p["sched_id"]] = dict(p)
+        return Result("done", "scheduled")
+
+    def cancel(self, sid):
+        self.saved.pop(int(sid), None)
+
+    def cancel_all(self):
+        self.saved.clear()
+
+    def java_ids(self):
+        return set(self.saved)
+
+    def reschedule_all(self):
+        return len(self.saved)
+
+    def set_reminder(self, rid, text, at_ms):
+        self.saved[rid] = {"reminder": text, "at_ms": at_ms}
+        return Result("done", "reminder set")
+
+
+DAILY_BOOK = [{"name": "Mummy", "number": "9000000001"}, {"name": "Neha", "number": "9000000011"},
+              {"name": "Neha 2", "number": "9000000022"}, {"name": "Rahul Sharma", "number": "+91 98765 43210"},
+              {"name": "Rahul Verma", "number": "98111 22233"}]
+
+
+class DailyMessages(unittest.TestCase):
+    P, D = ConstrainedParser(), date(2026, 11, 21)
+
+    def ent(self, text):
+        i = validate(self.P.parse(text, self.D), self.D)
+        self.assertEqual(i.intent, "schedule_message", text)
+        self.assertTrue(i.requires_approval)
+        return i.entities
+
+    def test_phrases(self):
+        cases = {
+            "har subah 8 baje mummy ko good morning message karo":
+                {"name": "mummy", "time": "08:00", "text": "good morning", "channel": None},
+            "every morning at 8 send good morning to mummy on whatsapp":
+                {"name": "mummy", "time": "08:00", "text": "good morning", "channel": "whatsapp"},
+            "roz raat 10 baje rahul ko 'good night' sms bhejo":
+                {"name": "rahul", "time": "22:00", "text": "good night", "channel": "sms"},
+            "daily at 7:30 am whatsapp neha 2 saying Good morning ji":
+                {"name": "neha 2", "time": "07:30", "text": "Good morning ji", "channel": "whatsapp"},
+            "har shaam 6 baje papa ko sms karo ki main nikal gaya":
+                {"name": "papa", "time": "18:00", "text": "main nikal gaya", "channel": "sms"},
+            'har subah mummy ko "Good morning, have a nice day!" bhejo':
+                {"name": "mummy", "time": "08:00", "text": "Good morning, have a nice day!"},
+            "every day at 9:15 pm text rahul 9876 saying Take your medicine":
+                {"name": "rahul", "prefix": "9876", "time": "21:15", "text": "Take your medicine", "channel": "sms"},
+            "roz dopahar 2 baje 9876543210 ko lunch time sms bhejo":
+                {"number": "9876543210", "time": "14:00", "text": "lunch time"},
+            "send good night to papa every night at 10": {"name": "papa", "time": "22:00", "text": "good night"},
+            "har raat mummy ko good night bhejo": {"time": "21:00", "text": "good night"},
+            "every day 8 am whatsapp mummy saying good morning": {"time": "08:00", "text": "good morning"},
+        }
+        for text, want in cases.items():
+            e = self.ent(text)
+            self.assertEqual({k: e.get(k) for k in want}, want, text)
+        e = self.ent("har monday subah 9 baje rahul ko hi bhejo")
+        self.assertEqual((e["days"], e["time"], e["name"], e["text"]), ([2], "09:00", "rahul", "hi"))
+        e = self.ent("every weekday at 8 am send good morning to mummy on whatsapp")
+        self.assertEqual((e["days"], e["text"]), ([2, 3, 4, 5, 6], "good morning"))
+        e = self.ent("weekend pe subah 10 baje neha ko hi whatsapp karo")
+        self.assertEqual((e["days"], e["name"]), ([1, 7], "neha"))
+        self.assertEqual(self.ent("har mahine 1 tarikh ko rahul ko hi bhejo")["repeat"], "unsupported")
+
+    def test_other_commands_unchanged(self):
+        for text, intent in (("kal ki photos dikhao", "find_photos"), ("Note: har subah message bhejna hai", "add_note"),
+                             ("open whatsapp", "open_app"), ("rahul ko call karo", "call_contact"),
+                             ("Kal project par 45 minutes kaam karne ka time nikalo.", "schedule_work")):
+            self.assertEqual(self.P.parse(text, self.D)["intent"], intent, text)
+
+    def mk(self, **kw):
+        self.daily = FakeDaily(**kw)
+        a, self.store, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"),
+                                contacts=FakeContacts(DAILY_BOOK), daily=self.daily)
+        return a
+
+    def test_full_flow_asks_channel_then_approval_then_saves(self):
+        a = self.mk()
+        r = a.handle("har subah 8 baje neha ko good morning bhejo")
+        self.assertEqual((r.kind, len(r.options)), ("choose", 2))
+        r = a.handle("whatsapp")
+        self.assertEqual(r.kind, "proposal")
+        self.assertIn("08:00", r.text)
+        self.assertIn("Neha (9000000011)", r.text)     # exact name: not 'Neha 2'
+        self.assertEqual(self.daily.saved, {})         # nothing scheduled before Approve
+        out = a.approve(r.action_id, r.action_hash)
+        self.assertIn("scheduled for 08:00", out.text)
+        self.assertEqual(len(self.daily.saved), 1)
+        recs = a.list_schedules()
+        self.assertEqual((recs[0]["name"], recs[0]["channel"], recs[0]["text"]), ("Neha", "whatsapp", "good morning"))
+        self.assertIn("already", a.approve(r.action_id, r.action_hash).text)  # second tap does nothing
+        self.assertEqual(len(self.daily.saved), 1)
+        self.assertTrue(a.delete_schedule(recs[0]["id"]))
+        self.assertEqual((self.daily.saved, a.list_schedules()), ({}, []))
+
+    def test_reject_schedules_nothing(self):
+        a = self.mk()
+        r = a.handle("har subah 8 baje mummy ko 'hi' sms bhejo")
+        self.assertEqual(r.kind, "proposal")
+        a.reject(r.action_id)
+        self.assertEqual((self.daily.saved, a.list_schedules()), ({}, []))
+
+    def test_permissions_asked_first(self):
+        a = self.mk(missing=["android.permission.SEND_SMS", "android.permission.POST_NOTIFICATIONS"])
+        r = a.handle("har subah 8 baje mummy ko 'hi' sms bhejo")
+        self.assertEqual(r.kind, "need_permission")
+        self.assertIn("android.permission.SEND_SMS", r.permissions)
+        r = a.handle("har subah 8 baje mummy ko 'hi' whatsapp karo")
+        self.assertEqual(r.permissions, ["android.permission.POST_NOTIFICATIONS"])
+
+    def test_ambiguous_contact_asks(self):
+        a = self.mk()
+        r = a.handle("roz raat 10 baje rahul ko 'good night' sms bhejo")
+        self.assertEqual((r.kind, len(r.options)), ("choose", 2))
+        r = a.handle("2")
+        self.assertEqual(r.kind, "proposal")
+        self.assertIn("Rahul Verma", r.text)
+
+    def test_missing_parts(self):
+        a = self.mk()
+        self.assertEqual(a.handle("har subah mummy ko message karo").kind, "need_info")   # no text
+        self.assertEqual(a.handle("har mahine subah 9 baje mummy ko 'hi' sms bhejo").kind, "unsupported")
+        r = a.handle("har monday subah 9 baje mummy ko 'hi' sms bhejo")
+        self.assertIn("Every Monday at 09:00", r.text)
+        self.assertIn("No contact", a.handle("har subah 8 baje zzqx ko 'hi' sms bhejo").text)
+
+    def test_resume_and_delete_all(self):
+        a = self.mk()
+        r = a.handle("har subah 8 baje mummy ko 'hi' sms bhejo")
+        a.approve(r.action_id, r.action_hash)
+        sid = next(iter(self.daily.saved))
+        self.daily.saved.clear()              # e.g. alarms lost after a force-stop
+        self.daily.saved[999] = {"x": 1}      # stale Java entry without a record
+        self.assertEqual(a.resume_schedules(), 1)
+        self.assertEqual(set(self.daily.saved), {sid})
+        a.delete_all_data()
+        self.assertEqual((self.daily.saved, a.list_schedules()), ({}, []))
+        self.assertNotIn("Mummy", str(self.store.audit_rows()))
+
+    def test_battery_exemption_requested_after_approval(self):
+        a = self.mk()
+        self.daily.battery_exempt = lambda: False
+        r = a.handle("har subah 8 baje mummy ko 'hi' sms bhejo")
+        out = a.approve(r.action_id, r.action_hash)
+        self.assertEqual(out.extra, "battery_exemption")
+        self.assertIn("run in the background", out.text)
+        self.daily.battery_exempt = lambda: True
+        r = a.handle("har raat 10 baje mummy ko 'bye' sms bhejo")
+        self.assertIsNone(a.approve(r.action_id, r.action_hash).extra)
+
+    def test_payload_validation(self):
+        from pa.adapters.daily_android import validate_payload
+        ok = {"sched_id": 5, "channel": "sms", "number": "9000000001", "name": "Mummy", "text": "hi", "time": "08:00"}
+        self.assertEqual(validate_payload(ok), [])
+        for k, v in (("channel", "email"), ("number", "tel:*#06#"), ("time", "25:00"), ("text", "x" * 501),
+                     ("sched_id", 0), ("name", " ")):
+            self.assertTrue(validate_payload(dict(ok, **{k: v})), k)
+
+
+class FakeAlarms(Adapter):  # TEST-ONLY mock
+    name = "alarms"
+
+    def __init__(self):
+        self.alarms, self.timers, self.shown = [], [], 0
+
+    def capability_check(self):
+        return True
+
+    def set_alarm(self, h, m, label=None, days=None):
+        self.alarms.append((h, m, label, days))
+        return Result("handed_off")
+
+    def set_timer(self, secs, label=None):
+        self.timers.append(secs)
+        return Result("handed_off")
+
+    def show_alarms(self):
+        self.shown += 1
+        return Result("handed_off")
+
+
+class Alarms(unittest.TestCase):
+    def mk(self):
+        self.al = FakeAlarms()
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), alarms=self.al)
+        return a
+
+    def test_alarm_phrases(self):
+        a = self.mk()
+        for text, want, reply in (
+                ("set an alarm of 5 am", (5, 0, None, None), "Alarm set for 5:00 AM in your Clock app."),
+                ("subah 5 baje ka alarm lagao", (5, 0, None, None), None),
+                ("wake me up at 6:30", (6, 30, None, None), None),
+                ("alarm 5:45 pm", (17, 45, None, None), "Alarm set for 5:45 PM in your Clock app."),
+                ("raat 11 baje alarm laga do", (23, 0, None, None), None),
+                ("set an alarm at 6 am for gym", (6, 0, "gym", None), None),
+                ("har din 6 baje ka alarm", (6, 0, None, [1, 2, 3, 4, 5, 6, 7]),
+                 "Alarm set for 6:00 AM every day in your Clock app.")):
+            r = a.handle(text)
+            self.assertEqual(self.al.alarms[-1], want, text)
+            if reply:
+                self.assertEqual(r.text, reply)
+
+    def test_asks_time_then_sets(self):
+        a = self.mk()
+        r = a.handle("set an alarm")
+        self.assertEqual(r.kind, "need_info")
+        a.handle("5 am")
+        self.assertEqual(self.al.alarms, [(5, 0, None, None)])
+
+    def test_pending_question_does_not_swallow_a_new_command(self):
+        a = self.mk()
+        self.assertEqual(a.handle("set a timer").kind, "need_info")
+        r = a.handle("kal pa test par 30 minutes kaam karne ka time nikalo")   # a new command, not "30 minutes"
+        self.assertEqual(self.al.timers, [])
+        self.assertNotIn("Timer set", r.text)
+        a.handle("set a timer")
+        a.handle("10 minutes")                                                # a bare answer still works
+        self.assertEqual(self.al.timers, [600])
+
+    def test_timer_and_show(self):
+        a = self.mk()
+        self.assertEqual(a.handle("10 minute ka timer lagao").text, "Timer set for 10 minutes.")
+        a.handle("timer 1 hour 30 minutes")
+        self.assertEqual(self.al.timers, [600, 5400])
+        a.handle("show my alarms")
+        self.assertEqual(self.al.shown, 1)
+
+    def test_other_commands_unchanged(self):
+        P, d = ConstrainedParser(), date(2026, 11, 21)
+        for text, intent in (("har subah 8 baje mummy ko good morning message karo", "schedule_message"),
+                             ("open clock", "open_app"), ("rahul ko call karo", "call_contact"),
+                             ("Kal project par 45 minutes kaam karne ka time nikalo.", "schedule_work")):
+            self.assertEqual(P.parse(text, d)["intent"], intent, text)
+
+
+class FakeDevice(Adapter):  # TEST-ONLY mock of the phone status reader
+    name = "device_info"
+
+    def __init__(self, battery=80, charging=False, next_alarm_ms=None):
+        self.battery, self.charging, self.next_alarm_ms = battery, charging, next_alarm_ms
+
+    def capability_check(self):
+        return True
+
+    def get(self, cat):
+        return {"battery": {"level": self.battery, "charging": self.charging, "temp_c": 31.5},
+                "storage": {"total": 128e9, "free": 6e9, "used_pct": 95},
+                "memory": {"total": 6e9, "free": 2e9, "low": False},
+                "device": {"maker": "vivo", "model": "I2219", "android": "16", "api": 36, "patch": "2026-10-01"},
+                "screen": {"brightness_pct": 40, "auto": True, "dark": True},
+                "network": {"online": False, "type": None},
+                "alarm": {"next_ms": self.next_alarm_ms}}[cat]
+
+
+class Everyday(unittest.TestCase):
+    """Phone status, to-dos/reminders, the day's plan, routines, compound commands, context."""
+
+    def mk(self, **kw):
+        self.daily, self.apps, self.al = FakeDaily(), FakeApps(APPS), FakeAlarms()
+        self.phone, self.dev = FakePhone(), kw.pop("device", FakeDevice())
+        a, self.store, self.cal = make(os.path.join(tempfile.mkdtemp(), "a.db"), cal=FakeCalendar(),
+                                       contacts=FakeContacts(BOOK), phone=self.phone, daily=self.daily,
+                                       apps=self.apps, alarms=self.al, device=self.dev)
+        return a
+
+    def test_phone_status(self):
+        a = self.mk(device=FakeDevice(battery=15))
+        self.assertEqual(a.handle("battery kitni hai").text,
+                         "Battery: 15%, not charging, 31.5°C. Battery is low: charge the phone soon.")
+        self.assertIn("almost full", a.handle("storage kitna bacha hai").text)
+        self.assertIn("Android 16", a.handle("phone details batao").text)
+        self.assertIn("works fully offline", a.handle("is internet working?").text)
+        self.assertIn("dark mode on", a.handle("brightness kitni hai").text)
+        self.assertEqual(a.handle("agla alarm kab hai").text, "No alarm is set.")
+        self.assertTrue(a.handle("what time is it").text.startswith("It is "))
+
+    def test_reminder_sets_one_time_alarm(self):
+        a = self.mk()   # NOW = 2026-11-20 10:00 +05:30
+        r = a.handle("mujhe kal 5 baje yaad dilana ki bill bharna hai")
+        self.assertEqual(r.text, "Reminder set for tomorrow 5:00 PM: bill bharna hai")
+        (rid, saved), = self.daily.saved.items()
+        self.assertEqual(saved["reminder"], "bill bharna hai")
+        at = datetime.fromtimestamp(saved["at_ms"] / 1000, NOW.tzinfo)
+        self.assertEqual((at.date(), at.hour), ((NOW + timedelta(days=1)).date(), 17))
+        a.handle("remind me at 6 am to drink water")      # 6 am already passed today -> tomorrow
+        self.assertIn("drink water (tomorrow 6:00 AM)", a.handle("show my todos").text)
+        self.assertEqual(a.resume_schedules(), 2)          # reminders are not treated as stale
+        self.assertEqual(len(self.daily.saved), 2)
+
+    def test_todos_list_done_and_priority(self):
+        a = self.mk()
+        a.handle("todo: buy milk")
+        a.handle("add todo pay electricity bill tomorrow high priority")
+        a.handle("doodh lana todo list mein daalo")
+        txt = a.handle("show my todos").text
+        self.assertTrue(txt.startswith("Your to-dos:\n1. pay electricity bill (high, tomorrow)"), txt)
+        self.assertEqual(a.handle("todo 1 done").text, "Done: pay electricity bill")
+        self.assertEqual(a.handle("mark buy milk done").text, "Done: buy milk")
+        self.assertEqual([t["text"] for t in a.list_todos()], ["doodh lana"])
+        self.assertIn("No open to-do", a.handle("mark zzz done").text)
+
+    def test_plan_day_suggests_free_slot(self):
+        a = self.mk(device=FakeDevice(battery=25))
+        a.handle("add todo pay electricity bill today high priority")
+        a.handle("remind me at 6 pm to drink water")
+        self.cal._busy = [(NOW.replace(hour=10, minute=0), NOW.replace(hour=11, minute=30))]
+        txt = a.handle("aaj ka plan kya hai").text
+        self.assertIn("10:00-11:30 busy (calendar)", txt)
+        self.assertIn("18:00 drink water", txt)
+        self.assertIn("battery is 25%", txt)
+        self.assertIn("Suggestion: do 'pay electricity bill' at 09:00-09:30", txt)  # free before the 10:00 meeting
+        a.handle("Yaad rakho mujhe shaam ko kaam karna pasand hai")
+        self.assertIn("at 17:00-17:30 (first free 30 minutes, your preferred evening)", a.handle("plan my day").text)
+
+    def test_routine_create_run_and_by_name(self):
+        a = self.mk()
+        r = a.handle("routine good morning: set an alarm for 7 am; battery kitni hai then open whatsapp")
+        self.assertIn("Saved routine 'good morning' (3 steps)", r.text)
+        r = a.handle("good morning")                       # just the name runs it
+        self.assertTrue(r.text.startswith("Routine 'good morning' done:"), r.text)
+        self.assertEqual(self.al.alarms[-1][:2], (7, 0))
+        self.assertEqual(self.apps.opened, ["com.whatsapp"])
+        a.handle("run good morning routine")
+        self.assertEqual(len(self.al.alarms), 2)
+        self.assertIn("do not understand", a.handle("routine bad: blah blah; open whatsapp").text)
+        self.assertIn("Deleted routine", a.handle("delete routine good morning").text)
+        self.assertIn("No routine called", a.handle("run good morning routine").text)
+
+    def test_compound_commands(self):
+        a = self.mk()
+        r = a.handle("set an alarm for 6 am and battery kitni hai then open youtube and open whatsapp")
+        self.assertEqual(self.al.alarms, [(6, 0, None, None)])
+        self.assertEqual(self.apps.opened, ["com.google.android.youtube"])  # 2nd app would cut the 1st off
+        self.assertIn("Not run because another app is already open: open whatsapp", r.text)
+        a.handle("Note: buy eggs and milk")                # free text is never split
+        self.assertEqual(self.store.all("note")[0]["text"], "buy eggs and milk")
+
+    def test_weekly_message_payload_and_plan(self):
+        a = self.mk()
+        r = a.handle("every weekday at 8 pm send good night to mummy by sms")
+        self.assertIn("Every weekday (Mon-Fri) at 20:00", r.text)
+        a.approve(r.action_id, r.action_hash)
+        (saved,) = self.daily.saved.values()
+        self.assertEqual(saved["days"], [2, 3, 4, 5, 6])
+        from pa.adapters.daily_android import days_mask, days_text
+        self.assertEqual((days_mask([2, 6]), days_mask(None), days_mask(list(range(1, 8)))), (0b100010, 0, 0))
+        self.assertEqual((days_text([1, 7]), days_text([2, 6])), ("weekend day", "Monday, Friday"))
+        self.assertIn("20:00 daily SMS to Mummy", a.handle("aaj ka plan").text)   # NOW is a Friday
+        a.handle("har sunday shaam 6 baje mummy ko 'hi' sms bhejo")
+        self.assertNotIn("18:00", a.handle("aaj ka plan").text)                   # not on Friday
+
+    def test_timed_routine(self):
+        a = self.mk()
+        self.daily.set_routine_trigger = lambda sid, name, time, days=None: (
+            self.daily.saved.__setitem__(sid, {"routine": name, "time": time, "days": days}) or Result("done"))
+        self.assertIn("No routine called", a.handle("good morning routine har din 7 baje").text)
+        a.handle("routine good morning: battery kitni hai; open whatsapp")
+        r = a.handle("good morning routine weekdays subah 7 baje chalao")
+        self.assertIn("Every weekday (Mon-Fri) at 07:00", r.text)
+        (sid, saved), = self.daily.saved.items()
+        self.assertEqual(saved, {"routine": "good morning", "time": "07:00", "days": [2, 3, 4, 5, 6]})
+        a.handle("schedule good morning routine every day at 6 am")     # replaces the old time
+        self.assertEqual([v["time"] for v in self.daily.saved.values()], ["06:00"])
+        self.assertEqual(a.resume_schedules(), 1)                         # trigger kept on app start
+        self.assertIn("no longer run", a.handle("stop good morning routine").text)
+        self.assertEqual(self.daily.saved, {})
+        a.handle("schedule good morning routine every day at 6 am")
+        a.handle("delete routine good morning")                           # deleting also stops the timer
+        self.assertEqual(self.daily.saved, {})
+
+    def test_timed_features_ask_for_background(self):
+        a = self.mk()
+        self.daily.battery_exempt = lambda: False
+        r = a.handle("remind me at 6 pm to drink water")
+        self.assertEqual(r.extra, "battery_exemption")
+        self.assertIn("allow Lazey to run in the background", r.text)
+        self.daily.battery_exempt = lambda: True
+        self.assertIsNone(a.handle("remind me at 7 pm to call papa").extra)
+
+    def test_did_you_mean(self):
+        a = self.mk()
+        self.assertEqual(a.handle("mujhe alarm chahiye kal").kind, "need_info")  # understood: asks the time
+        r = a.handle("mujhe doodh lena bhoolna nahi hai")
+        self.assertTrue(r.text.startswith("Sorry, I did not understand that. Try:\n- remind me at 6 pm"), r.text)
+        self.assertIn("- ", a.handle("xyz qwerty").text)
+
+    def test_usko_means_last_contact_but_asks_first(self):
+        a = self.mk()
+        self.assertEqual(a.handle("usko call karo").kind, "need_info")      # nobody yet
+        a.handle("mummy ko call karo")
+        r = a.handle("usko phir se call karo")
+        self.assertEqual((r.kind, r.text), ("choose", "Call Mummy (9000000001) again? Say 1 or yes."))
+        self.assertEqual(len(self.phone.calls), 1)                          # not called yet
+        a.handle("haan")
+        self.assertEqual([c["number"] for c in self.phone.calls], ["9000000001", "9000000001"])
+        a.handle("usko call karo")
+        self.assertEqual(a.handle("nahi").text, "Okay, nothing was done.")
+        self.assertEqual(len(self.phone.calls), 2)
+
+    def test_proposal_alone_does_not_become_last_contact(self):
+        # phone test: an SMS card that was never approved made "usko call karo" dial that number
+        msg = FakeMessages()
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), contacts=FakeContacts(BOOK),
+                       phone=FakePhone(), messages=msg)
+        r = a.handle("send hi to 9000000077 by sms")
+        self.assertEqual(r.kind, "proposal")
+        r = a.handle("usko call karo")
+        self.assertEqual(r.kind, "need_info")                                # asks who, calls no one
+
+
+class ChatHistory(unittest.TestCase):
+    def test_saved_encrypted_ordered_trimmed_cleared(self):
+        path = os.path.join(tempfile.mkdtemp(), "a.db")
+        a, store, _ = make(path)
+        for i in range(5):
+            a.log_chat("user", "> secret line %d" % i)
+            a.log_chat("bot", "reply %d" % i)
+        a.log_chat("evil", "ignored")
+        h = a.chat_history()
+        self.assertEqual([x["text"] for x in h][:2], ["> secret line 0", "reply 0"])
+        self.assertEqual((len(h), h[-1]["text"]), (10, "reply 4"))
+        self.assertEqual(len(a.chat_history(limit=3)), 3)
+        with open(path, "rb") as f:
+            self.assertNotIn(b"secret line", f.read())          # encrypted on disk
+        a.CHAT_KEEP = 4
+        self.assertEqual([x["text"] for x in a.chat_history()], ["> secret line 3", "reply 3",
+                                                                "> secret line 4", "reply 4"])
+        a.clear_chat()
+        self.assertEqual(a.chat_history(), [])
+        a.log_chat("user", "> again")
+        a.delete_all_data()
+        self.assertEqual(a.chat_history(), [])
+
+
+class FakeMessages(Adapter):  # TEST-ONLY mock
+    name = "sms_message"
+
+    def __init__(self, sms_perm=True):
+        self.sms_perm, self.sent, self.whatsapp = sms_perm, [], []
+
+    def capability_check(self):
+        return True
+
+    def permission_check(self):
+        return "granted" if self.sms_perm else "denied"
+
+    def required_permissions(self):
+        return ["android.permission.SEND_SMS"]
+
+    def validate(self, p):
+        from pa.adapters.messages import validate_sms
+        return validate_sms(p)
+
+    def preview(self, p):
+        from pa.adapters.messages import preview_sms
+        return preview_sms(p)
+
+    def execute(self, p):
+        self.sent.append(dict(p))
+        return Result("done", "sms handed to the phone")
+
+    def open_whatsapp(self, number, text):
+        self.whatsapp.append((number, text))
+        return Result("handed_off", "whatsapp chat opened")
+
+    auto, armed, result = False, None, None
+
+    def auto_send_ready(self):
+        return self.auto
+
+    def arm_auto_send(self, text):
+        self.armed = text
+
+    def take_auto_send_result(self):
+        r, self.result = self.result, None
+        return r
+
+
+class SendNow(unittest.TestCase):
+    P, D = ConstrainedParser(), date(2026, 11, 21)
+
+    def mk(self, **kw):
+        self.msg = FakeMessages(**kw)
+        a, self.store, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), contacts=FakeContacts(DAILY_BOOK),
+                                phone=FakePhone(), messages=self.msg)
+        return a
+
+    def test_phrases(self):
+        cases = {
+            "Open WhatsApp and send Neha a message hi": {"name": "neha", "text": "hi", "channel": "whatsapp"},
+            "Send Neha a message from Airtel hi": {"name": "neha", "text": "hi", "channel": "sms", "sim": "airtel"},
+            "neha ko hi message karo": {"name": "neha", "text": "hi", "channel": None},
+            "neha 2 ko whatsapp pe good night bhejo": {"name": "neha 2", "text": "good night", "channel": "whatsapp"},
+            "send good morning to mummy on whatsapp": {"name": "mummy", "text": "good morning"},
+            "message rahul saying I will call you later": {"name": "rahul", "text": "I will call you later"},
+            "send a message to papa saying reached home": {"name": "papa", "text": "reached home"},
+            "rahul ko sms karo ki main aa raha hun": {"name": "rahul", "text": "main aa raha hun", "channel": "sms"},
+            "send hi to 9876543210 by sms": {"number": "9876543210", "text": "hi", "channel": "sms"},
+            'mummy ko "Khana kha liya?" sim 2 se sms bhejo': {"name": "mummy", "text": "Khana kha liya?", "sim": "2"},
+        }
+        for text, want in cases.items():
+            i = validate(self.P.parse(text, self.D), self.D)
+            self.assertEqual(i.intent, "send_message", text)
+            self.assertEqual({k: i.entities.get(k) for k in want}, want, text)
+        for text, intent in (("open whatsapp", "open_app"), ("whatsapp kholo", "open_app"),
+                             ("rahul ko call karo", "call_contact"), ("kal ki photos dikhao", "find_photos"),
+                             ("har subah 8 baje mummy ko 'hi' bhejo", "schedule_message")):
+            self.assertEqual(self.P.parse(text, self.D)["intent"], intent, text)
+
+    def test_whatsapp_opens_chat_without_sending(self):
+        a = self.mk()
+        r = a.handle("Open WhatsApp and send Neha a message hi")
+        self.assertIn("press Send", r.text)
+        self.assertEqual(self.msg.whatsapp, [("9000000011", "hi")])   # exact 'Neha', not 'Neha 2'
+        self.assertEqual(self.msg.sent, [])
+
+    def test_sms_needs_approval_and_uses_sim(self):
+        a = self.mk()
+        r = a.handle("Send Neha a message from Airtel hi")
+        self.assertEqual(r.kind, "proposal")
+        self.assertIn("SIM 2 (Airtel)", r.text)
+        self.assertEqual(self.msg.sent, [])                     # nothing before Approve
+        out = a.approve(r.action_id, r.action_hash)
+        self.assertIn("SMS handed to the phone", out.text)
+        self.assertEqual((self.msg.sent[0]["number"], self.msg.sent[0]["sim_slot"]), ("9000000011", 2))
+        a.approve(r.action_id, r.action_hash)                   # second tap: nothing more
+        self.assertEqual(len(self.msg.sent), 1)
+
+    def test_reject_sends_nothing(self):
+        a = self.mk()
+        r = a.handle("rahul verma ko sms karo ki hi")
+        a.reject(r.action_id)
+        self.assertEqual(self.msg.sent, [])
+
+    def test_asks_channel_and_contact(self):
+        a = self.mk()
+        r = a.handle("rahul ko hi message karo")
+        self.assertEqual(r.kind, "choose")
+        r = a.handle("whatsapp")
+        self.assertEqual((r.kind, len(r.options)), ("choose", 2))  # two Rahuls
+        r = a.handle("second one")
+        self.assertEqual(self.msg.whatsapp, [("98111 22233", "hi")])
+
+    def test_permission_and_wrong_sim(self):
+        a = self.mk(sms_perm=False)
+        r = a.handle("rahul verma ko sms karo ki hi")
+        self.assertEqual((r.kind, r.permissions), ("need_permission", ["android.permission.SEND_SMS"]))
+        a = self.mk()
+        r = a.handle("Send Neha a message from bsnl hi")
+        self.assertIn("No message was sent", r.text)
+        self.assertEqual(self.msg.sent, [])
+
+    def test_speech_style_name_then_text(self):
+        # what the offline recognizer wrote on the phone: "message <name> on whatsapp hi"
+        book = DAILY_BOOK + [{"name": "Aman", "number": "9000000044"}]
+        msg = FakeMessages()
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), contacts=FakeContacts(book),
+                       phone=FakePhone(), messages=msg)
+        a.handle("message aman on whatsapp hi")
+        a.handle("message neha 2 on what's app good night")
+        a.handle("Message Rahul Verma on WhatsApp see you at 5")
+        self.assertEqual(msg.whatsapp, [("9000000044", "hi"), ("9000000022", "good night"),
+                                        ("98111 22233", "see you at 5")])
+
+    def test_auto_send(self):
+        a = self.mk()
+        r = a.handle("send a message hi to mummy on whatsapp")
+        self.assertEqual(r.extra, "auto_send_setup")             # off: user presses Send, offer setup
+        self.assertIsNone(self.msg.armed)
+        self.assertIsNone(a.auto_send_report())                   # nothing was awaited
+        self.msg.auto = True
+        r = a.handle("send a message good night to mummy on whatsapp")
+        self.assertEqual((r.extra, self.msg.armed), ("await_auto_send", "good night"))  # armed with exact text
+        self.msg.result = "waiting"
+        self.assertIsNone(a.auto_send_report())                   # still within the window
+        self.msg.result = "sent"
+        self.assertEqual(a.auto_send_report().text, "WhatsApp message sent to Mummy.")
+        a.handle("send a message hi to neha on whatsapp")
+        self.msg.result = "timeout"
+        self.assertIn("Not sent", a.auto_send_report().text)
+
+    def test_one_line_english_orders(self):
+        book = DAILY_BOOK + [{"name": "Aman", "number": "9000000044"}]
+        for text in ("send a message hi to aman on whatsapp", "Send a message hi to Aman on WhatsApp.",
+                     "send message hi to aman on whatsapp", "send a whatsapp message hi to aman",
+                     "send a hi message to aman on whatsapp", "send a message saying hi to aman on whatsapp",
+                     "on whatsapp send a message hi to aman", "send aman a message hi on whatsapp",
+                     "whatsapp aman hi", "send a message to aman hi on whatsapp",
+                     "send a message to aman on whatsapp saying hi", "send hi to aman on whatsapp",
+                     "message aman on whatsapp hi"):
+            msg = FakeMessages()
+            a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), contacts=FakeContacts(book),
+                           phone=FakePhone(), messages=msg)
+            r = a.handle(text)
+            self.assertEqual(msg.whatsapp, [("9000000044", "hi")], "%s -> %s" % (text, r.text))
+        i = validate(self.P.parse("send a message hi how are you to aman on whatsapp", self.D), self.D)
+        self.assertEqual((i.entities["name"], i.entities["text"]), ("aman", "hi how are you"))
+        self.assertEqual(self.P.parse("I want to go to market", self.D)["intent"], "unknown")
+
+    def test_asks_one_thing_at_a_time_and_remembers(self):
+        a = self.mk()
+        r = a.handle("whatsapp pe message bhejo")
+        self.assertEqual((r.kind, r.text), ("need_info", "Who should get the message?"))
+        r = a.handle("mummy")
+        self.assertIn("What should the message to mummy say?", r.text)
+        a.handle("hii")
+        self.assertEqual(self.msg.whatsapp, [("9000000001", "hii")])
+        r = a.handle("message to neha on whatsapp")      # text missing
+        self.assertEqual(r.kind, "need_info")
+        r = a.handle("open calculator")                   # a new command: the question is dropped
+        self.assertNotEqual(r.kind, "proposal")
+        self.assertEqual(len(self.msg.whatsapp), 1)
+
+    def test_whatsapp_number_format(self):
+        from pa.adapters.messages import wa_number
+        self.assertEqual(wa_number("98765 43210"), "919876543210")
+        self.assertEqual(wa_number("+91 98765 43210"), "919876543210")
+        self.assertEqual(wa_number("09876543210"), "919876543210")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
