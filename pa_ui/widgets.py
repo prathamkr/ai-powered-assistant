@@ -256,9 +256,10 @@ class _Surface:
     """Draws a rounded, softly bordered surface behind `widget`; follows pos/size/theme.
     Bound through bound *methods* so Kivy holds them weakly; the widget owns the only strong reference."""
 
-    def __init__(self, widget, fill="surface", border=0.35, radius=None, tint=0.0, alpha=1.0):
+    def __init__(self, widget, fill="surface", border=0.35, radius=None, tint=0.0, alpha=1.0, tint_role="accent"):
         self._ref = weakref.ref(widget)
         self.fill, self.border, self.radius, self.tint, self.alpha = fill, border, radius, tint, alpha
+        self.tint_role = tint_role   # the colour the surface and its border lean towards
         widget.bind(pos=self.draw, size=self.draw)
         T.bind(version=self.draw)
         self.draw()
@@ -270,13 +271,13 @@ class _Surface:
         r = dp(T.radius) if self.radius is None else dp(self.radius)
         r = min(r, w.height / 2, w.width / 2)
         base = T.h(self.fill)
-        fill = themes.mix(base, T.h("accent"), self.tint) if self.tint else base
+        fill = themes.mix(base, T.h(self.tint_role), self.tint) if self.tint else base
         w.canvas.before.clear()
         with w.canvas.before:
             Color(*themes.hex_to_rgba(fill, self.alpha))
             RoundedRectangle(pos=w.pos, size=w.size, radius=[r])
             if self.border:
-                Color(*themes.hex_to_rgba(themes.mix(base, T.h("accent"), self.border), 0.9))
+                Color(*themes.hex_to_rgba(themes.mix(base, T.h(self.tint_role), self.border), 0.9))
                 Line(rounded_rectangle=(w.x, w.y, w.width, w.height, r), width=dp(1))
 
 

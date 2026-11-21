@@ -32,6 +32,16 @@ class ThemeTests(unittest.TestCase):
         for tid in ("violet", "daylight", "contrast"):
             self.assertIn(tid, themes.BUILTIN)
 
+    def test_note_colour_follows_the_theme_and_reads_on_the_note_pill(self):
+        notes = set()
+        for tid in themes.BUILTIN:
+            c = themes.resolve(tid)
+            pill = themes.mix(c["surface"], c["sys"], 0.14)   # how a note is drawn: surface leaning to its colour
+            self.assertGreaterEqual(themes.contrast_ratio(c["sys"], pill), 4.5, tid)
+            notes.add(c["sys"])
+        self.assertGreaterEqual(len(notes), 7)   # not one fixed yellow for everybody
+        self.assertNotIn("#fcd34d", notes)
+
     def test_contrast_ratio_extremes(self):
         self.assertAlmostEqual(themes.contrast_ratio("#000000", "#ffffff"), 21.0, places=1)
         self.assertAlmostEqual(themes.contrast_ratio("#777777", "#777777"), 1.0, places=3)

@@ -1,5 +1,6 @@
 """The look of Lazey: animated orb + waves, greeting, chat bubbles, brand header, slide-out menu."""
 import math
+import random
 
 from kivy.clock import Clock
 from kivy.graphics import Color, Ellipse, Line
@@ -18,35 +19,97 @@ SUGGESTIONS = (("Remember ...", "Remember "), ("Note: ...", "Note: "),
                ("Show photos from yesterday", "Show photos from yesterday"))
 
 
+def _ease_out_cubic(t):
+    return 1 - (1 - t) ** 3
+
+
+def _ease_out_back(t, k=1.9):
+    """Rises past 1 and settles back (a little overshoot), for the ring popping back in."""
+    t -= 1
+    return 1 + (k + 1) * t ** 3 + k * t ** 2
+
+
+POP_BURST = 0.20      # seconds: ring swells and vanishes
+POP_GONE_UNTIL = 0.50  # seconds: ring stays away
+POP_TOTAL = 1.05      # seconds: ring is back, animation over
+SPARKS = 14
+
+
 class Orb(Widget):
-    """A glowing ring with flowing wave ribbons. Animates (~24 fps) only while `active`."""
+    """A glowing ring with flowing wave ribbons. Animates (~24 fps) only while `active`.
+    Tap the ring and it pops (shockwave + sparks), disappears for a moment and pops back in."""
     active = BooleanProperty(False)
 
     def __init__(self, **kw):
         super().__init__(**kw)
         self.t = 0.0
         self._ev = None
+        self._hz = 0
+        self.pop = None        # seconds since the tap, or None when idle
+        self._sparks = []
         self.bind(pos=self.redraw, size=self.redraw, active=self._toggle)
         T.bind(version=self.redraw)
 
-    def _toggle(self, *_):
-        if self.active and self._ev is None:
-            self._ev = Clock.schedule_interval(self._tick, 1 / 24.0)
-        elif not self.active and self._ev is not None:
+    def _schedule(self, hz):
+        if self._ev is not None and self._hz == hz:
+            return
+        if self._ev is not None:
             self._ev.cancel()
-            self._ev = None
+        self._hz = hz
+        self._ev = Clock.schedule_interval(self._tick, 1.0 / hz)
+
+    def _toggle(self, *_):
+        if self.active:
+            self._schedule(60 if self.pop is not None else 24)
+        elif self._ev is not None:
+            self._ev.cancel()
+            self._ev, self._hz = None, 0
         self.redraw()
+
+    def _radius(self):
+        return min(self.height * 0.30, dp(52))
+
+    def on_touch_down(self, touch):
+        if self.active and self.pop is None:
+            r = self._radius() * 1.5   # a generous target around the ring
+            if (touch.x - self.center_x) ** 2 + (touch.y - self.center_y) ** 2 <= r * r:
+                self.pop = 0.0
+                self._sparks = [(random.uniform(0, 2 * math.pi), random.uniform(0.85, 1.6), random.uniform(0.7, 1.3))
+                                for _ in range(SPARKS)]
+                self._schedule(60)   # smooth while it plays
+                return True
+        return super().on_touch_down(touch)
 
     def _tick(self, dt):
         self.t += dt
+        if self.pop is not None:
+            self.pop += dt
+            if self.pop >= POP_TOTAL:
+                self.pop, self._sparks = None, []
+                self._schedule(24)
         self.redraw()
+
+    def _ring(self):
+        """(scale, opacity) of the ring right now."""
+        p = self.pop
+        if p is None:
+            return 1.0, 1.0
+        if p < POP_BURST:
+            u = p / POP_BURST
+            return 1.0 + 0.35 * _ease_out_cubic(u), 1.0 - u
+        if p < POP_GONE_UNTIL:
+            return 0.0, 0.0
+        u = (p - POP_GONE_UNTIL) / (POP_TOTAL - POP_GONE_UNTIL)
+        return max(0.0, _ease_out_back(min(1.0, u))), min(1.0, u * 3)
 
     def redraw(self, *_):
         self.canvas.clear()
         if self.width <= 0 or self.height <= 0:
             return
         cx, cy = self.center_x, self.center_y
-        r = min(self.height * 0.30, dp(52))
+        r0 = self._radius()
+        scale, vis = self._ring()
+        r = r0 * scale
         a1, a2 = T.c("accent"), T.c("accent2")
         light = themes.hex_to_rgba(themes.mix(T.h("accent"), "#ffffff", 0.45))
         t, n = self.t, 72
@@ -54,8 +117,8 @@ class Orb(Widget):
         with self.canvas:
             for i in range(8):  # soft glow behind the ring
                 f = (8 - i) / 8.0
-                rr = r * (1.15 + f * 1.5)
-                Color(a1[0], a1[1], a1[2], 0.03)
+                rr = r0 * (1.15 + f * 1.5) * (0.6 + 0.4 * scale)
+                Color(a1[0], a1[1], a1[2], 0.03 * (0.3 + 0.7 * vis))
                 Ellipse(pos=(cx - rr, cy - rr), size=(2 * rr, 2 * rr))
             ribbons = ((a1, 0.0, 2.2, 0.9, 0.55), (a2, 0.55, 2.6, 1.15, 0.5), (light, 1.1, 2.0, 0.75, 0.38),
                        (a1, 1.7, 3.0, 1.0, 0.3), (a2, 2.3, 2.4, 0.6, 0.3))
@@ -68,18 +131,38 @@ class Orb(Widget):
                     pts += [self.x + (u + 1) / 2 * self.width,
                             cy + amp * env * math.sin(u * freq * math.pi + t * speed + ph)]
                 Line(points=pts, width=dp(1.1))
-            Color(*themes.hex_to_rgba(T.h("bg"), 0.8))   # hides ribbons behind the ring
-            Ellipse(pos=(cx - r, cy - r), size=(2 * r, 2 * r))
-            for w, alpha in ((dp(9), 0.07), (dp(5), 0.13), (dp(2.4), 0.95)):
-                Color(light[0], light[1], light[2], alpha)
-                Line(circle=(cx, cy, r), width=w)
-            for k, (col, alpha) in enumerate(((a1, 0.95), (light, 0.7), (a2, 0.8))):   # waves inside the ring
-                Color(col[0], col[1], col[2], alpha)
-                pts = []
-                for i in range(41):
-                    u = i / 40 * 2 - 1
-                    pts += [cx + u * r * 0.82, cy + r * 0.34 * math.cos(u * math.pi / 2) * math.sin(u * 3.2 + t * 1.6 + k * 0.9)]
-                Line(points=pts, width=dp(1.3))
+            if self.pop is not None:
+                self._draw_burst(cx, cy, r0, a1, light)
+            if r > dp(1) and vis > 0.02:
+                Color(*themes.hex_to_rgba(T.h("bg"), 0.8 * vis))   # hides ribbons behind the ring
+                Ellipse(pos=(cx - r, cy - r), size=(2 * r, 2 * r))
+                for w, alpha in ((dp(9), 0.07), (dp(5), 0.13), (dp(2.4), 0.95)):
+                    Color(light[0], light[1], light[2], alpha * vis)
+                    Line(circle=(cx, cy, r), width=w)
+                for k, (col, alpha) in enumerate(((a1, 0.95), (light, 0.7), (a2, 0.8))):   # waves inside the ring
+                    Color(col[0], col[1], col[2], alpha * vis)
+                    pts = []
+                    for i in range(41):
+                        u = i / 40 * 2 - 1
+                        pts += [cx + u * r * 0.82,
+                                cy + r * 0.34 * math.cos(u * math.pi / 2) * math.sin(u * 3.2 + t * 1.6 + k * 0.9)]
+                    Line(points=pts, width=dp(1.3))
+
+    def _draw_burst(self, cx, cy, r0, accent, light):
+        """Shockwave ring + sparks flying outwards, drawn while the ring pops."""
+        p = self.pop
+        if p < 0.6:
+            u = p / 0.6
+            Color(light[0], light[1], light[2], 0.85 * (1 - u))
+            Line(circle=(cx, cy, r0 * (1.0 + 1.7 * _ease_out_cubic(u))), width=max(dp(0.8), dp(3.2) * (1 - u)))
+        if p < 0.55:
+            u = p / 0.55
+            for i, (ang, speed, size) in enumerate(self._sparks):
+                dist = r0 * (1.0 + 2.3 * speed * _ease_out_cubic(u))
+                rad = dp(3.6) * size * (1 - 0.6 * u)
+                col = light if i % 2 == 0 else accent
+                Color(col[0], col[1], col[2], 1 - u)
+                Ellipse(pos=(cx + math.cos(ang) * dist - rad, cy + math.sin(ang) * dist - rad), size=(2 * rad, 2 * rad))
 
 
 class Hero(BoxLayout):
@@ -147,8 +230,11 @@ class Bubble(BoxLayout):
         self.label.color = T.c(role)
         self.label.font_size = sp(15 * T.font_scale)
         self.label.canvas.before.clear()
-        if T.bubbles == "plain" or self.who == "sys":
+        if T.bubbles == "plain":
             self.label._surf = None
+            return
+        if self.who == "sys":   # notes and errors: a soft pill tinted with the theme's own note colour
+            self.label._surf = _Surface(self.label, fill="surface", border=0.45, radius=16, tint=0.14, tint_role="sys")
             return
         self.label._surf = _Surface(self.label, fill="surface", border=0.55 if self.who == "user" else 0.12,
                                     tint=0.22 if self.who == "user" else 0.0)

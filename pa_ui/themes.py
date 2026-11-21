@@ -12,31 +12,31 @@ BUILTIN = {
     "violet": ("Violet", dict(
         bg="#0b0816", bg2="#150d2e", panel="#17112b", surface="#1d1640", button="#2a2060", button_text="#f1ecff",
         accent="#8b5cf6", accent2="#4f46e5", text="#f4f1ff", muted="#b9a9f0", user="#c4b5fd", bot="#f4f1ff",
-        sys="#fcd34d", input_bg="#241c4d", input_text="#f4f1ff")),
+        sys="#f0abfc", input_bg="#241c4d", input_text="#f4f1ff")),
     "ocean": ("Ocean", dict(
         bg="#06141f", bg2="#0a2a3f", panel="#0d2233", surface="#12324a", button="#1c4a69", button_text="#e6f6ff",
         accent="#22b8f0", accent2="#2563eb", text="#eaf7ff", muted="#9ccbe6", user="#7dd3fc", bot="#eaf7ff",
-        sys="#fcd34d", input_bg="#123a56", input_text="#eaf7ff")),
+        sys="#5eead4", input_bg="#123a56", input_text="#eaf7ff")),
     "emerald": ("Emerald", dict(
         bg="#06140e", bg2="#0b2a1d", panel="#0e2318", surface="#143324", button="#1f5238", button_text="#e8fff2",
         accent="#22c55e", accent2="#0d9488", text="#ecfff4", muted="#9fd8b8", user="#86efac", bot="#ecfff4",
-        sys="#fde68a", input_bg="#17402c", input_text="#ecfff4")),
+        sys="#bef264", input_bg="#17402c", input_text="#ecfff4")),
     "rose": ("Rose", dict(
         bg="#170812", bg2="#2e0f24", panel="#26101e", surface="#35162a", button="#5b2347", button_text="#fff0f7",
         accent="#f43f8e", accent2="#c026d3", text="#fff0f7", muted="#f0a9cb", user="#fbb6d6", bot="#fff0f7",
-        sys="#fcd34d", input_bg="#43203a", input_text="#fff0f7")),
+        sys="#fdba74", input_bg="#43203a", input_text="#fff0f7")),
     "amber": ("Amber", dict(
         bg="#140e05", bg2="#2b1c08", panel="#241809", surface="#33220c", button="#5a3b12", button_text="#fff6e5",
         accent="#f59e0b", accent2="#ea580c", text="#fff7ea", muted="#e8c48a", user="#fcd34d", bot="#fff7ea",
-        sys="#fb923c", input_bg="#43300f", input_text="#fff7ea")),
+        sys="#fca5a5", input_bg="#43300f", input_text="#fff7ea")),
     "graphite": ("Graphite", dict(
         bg="#0d0e10", bg2="#1a1c20", panel="#191b1f", surface="#23262b", button="#353941", button_text="#f3f4f6",
         accent="#94a3b8", accent2="#64748b", text="#f3f4f6", muted="#a8b0bd", user="#cbd5e1", bot="#f3f4f6",
-        sys="#fcd34d", input_bg="#2b2f36", input_text="#f3f4f6")),
+        sys="#a5b4fc", input_bg="#2b2f36", input_text="#f3f4f6")),
     "daylight": ("Daylight", dict(
         bg="#f6f4ff", bg2="#e6e0ff", panel="#ffffff", surface="#ffffff", button="#e6e1fb", button_text="#231a4a",
         accent="#6d4ff0", accent2="#4338ca", text="#1c1536", muted="#5b4f8a", user="#4c2fd0", bot="#1c1536",
-        sys="#8a4f00", input_bg="#ffffff", input_text="#1c1536")),
+        sys="#a21caf", input_bg="#ffffff", input_text="#1c1536")),
     "contrast": ("High contrast", dict(
         bg="#000000", bg2="#000000", panel="#000000", surface="#141414", button="#ffff00", button_text="#000000",
         accent="#00ffff", accent2="#00bfff", text="#ffffff", muted="#e0e0e0", user="#00ffff", bot="#ffffff",
@@ -111,7 +111,7 @@ def resolve(theme_id):
 # (foreground role, background role, minimum ratio) pairs the editor warns about
 READABILITY = (("text", "bg", 4.5), ("muted", "bg", 4.5), ("text", "bg2", 4.5), ("button_text", "button", 4.5),
                ("input_text", "input_bg", 4.5), ("bot", "surface", 4.5), ("user", "surface", 3.0),
-               ("user", "bg", 3.0), ("sys", "bg", 3.0), ("text", "panel", 4.5))
+               ("user", "bg", 3.0), ("sys", "bg", 3.0), ("sys", "surface", 3.0), ("text", "panel", 4.5))
 
 
 def readability_problems(colors):
