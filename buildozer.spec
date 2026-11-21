@@ -1,6 +1,6 @@
 [app]
-title = Local Assistant
-package.name = localassistant
+title = Pacsit
+package.name = pacsit
 package.domain = org.pa
 source.dir = .
 source.include_exts = py

@@ -1,4 +1,4 @@
-"""Single-screen Kivy UI for the local assistant prototype."""
+"""Pacsit: single-screen Kivy UI for the local assistant prototype."""
 import threading
 
 from kivy.app import App
@@ -6,30 +6,28 @@ from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 
 from pa.bootstrap import KeyUnavailable, build_assistant
-
-BG = (0.07, 0.07, 0.10, 1)
-
-
-class Msg(Label):
-    def __init__(self, text, who="bot", **kw):
-        color = {"user": (0.6, 0.8, 1, 1), "bot": (1, 1, 1, 1), "sys": (1, 0.8, 0.4, 1)}[who]
-        super().__init__(text=text, color=color, size_hint_y=None, halign="left", valign="top", **kw)
-        self.bind(width=lambda *_: setattr(self, "text_size", (self.width, None)),
-                  texture_size=lambda *_: setattr(self, "height", self.texture_size[1] + dp(8)))
+from pa_ui.calendar_view import CalendarView
+from pa_ui.chrome import Chrome
+from pa_ui.config import APP_NAME, ConfigStore
+from pa_ui.editor import StyleEditor
+from pa_ui.pacsit_widgets import SUGGESTIONS, Bubble
+from pa_ui.widgets import Status, T, ThemedButton, style_input, style_label, style_popup, surface
 
 
 class AssistantApp(App):
-    title = "Local Assistant"
+    title = APP_NAME
 
     def build(self):
-        Window.clearcolor = BG
+        # Theme + button layout come from the saved GUI config (see pa_ui/ and the Style button).
+        store = ConfigStore(self.user_data_dir)
+        self.chrome = Chrome(self, store.load(), store)
+        T.apply(self.chrome.cfg)  # sets Window.clearcolor too
         # Keyboard handling: do NOT pan the window ("below_target" pushed the header and the
         # chat history off the top). Instead the bottom padding grows to the keyboard height
         # (see track_keyboard), so only the chat area shrinks and the input sits on top of
@@ -40,14 +38,7 @@ class AssistantApp(App):
         self.pending = None  # (action_id, hash) of the proposal currently on screen
         self.working = False
 
-        root = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(6))
-        bar = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
-        self.status = Label(text="starting...", halign="left", size_hint_x=1, font_size=dp(12))
-        self.status.bind(size=lambda *_: setattr(self.status, "text_size", self.status.size))
-        b1 = Button(text="Prefs", size_hint_x=None, width=dp(70), on_release=lambda *_: self.show_prefs())
-        b2 = Button(text="Tasks", size_hint_x=None, width=dp(70), on_release=lambda *_: self.show_tasks())
-        for w in (self.status, b1, b2):
-            bar.add_widget(w)
+        self.status = Status()  # .text is shown from the avatar button; .level colours its dot
 
         self.log = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
         self.log.bind(minimum_height=self.log.setter("height"))
@@ -55,27 +46,30 @@ class AssistantApp(App):
         self.sv.add_widget(self.log)
 
         # proposed-action card (hidden until a proposal exists)
-        self.card = BoxLayout(orientation="vertical", size_hint_y=None, height=0, opacity=0, spacing=dp(4))
+        self.card = BoxLayout(orientation="vertical", size_hint_y=None, height=0, opacity=0, spacing=dp(4),
+                              padding=dp(12))
+        surface(self.card, fill="surface", border=0.5, radius=22)
         self.card_text = Label(text="", halign="left", valign="top", size_hint_y=1)
         self.card_text.bind(size=lambda *_: setattr(self.card_text, "text_size", self.card_text.size))
+        style_label(self.card_text)
         btns = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
-        self.approve_btn = Button(text="Approve", on_release=lambda *_: self.on_approve())
-        self.reject_btn = Button(text="Reject", on_release=lambda *_: self.on_reject())
+        self.approve_btn = ThemedButton(text="Approve", icon="check", kind="accent", size_hint_x=1, height=dp(44),
+                                        on_release=lambda *_: self.on_approve())
+        self.reject_btn = ThemedButton(text="Reject", icon="close", size_hint_x=1, height=dp(44),
+                                       on_release=lambda *_: self.on_reject())
         btns.add_widget(self.approve_btn)
         btns.add_widget(self.reject_btn)
         self.card.add_widget(self.card_text)
         self.card.add_widget(btns)
 
-        row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
-        self.entry = TextInput(multiline=False, hint_text="Type here...", write_tab=False)
+        self.entry = TextInput(multiline=False, hint_text="Message %s..." % APP_NAME, write_tab=False)
         self.entry.bind(on_text_validate=lambda *_: self.send())
-        self.send_btn = Button(text="Send", size_hint_x=None, width=dp(70), on_release=lambda *_: self.send())
-        row.add_widget(self.entry)
-        row.add_widget(self.send_btn)
 
-        for w in (bar, self.sv, self.card, row):
-            root.add_widget(w)
+        # Chrome puts the header, greeting and typing bar around these widgets, per the saved layout.
+        root = self.chrome.assemble(self.status, self.sv, self.card, self.entry)
         self.root_box, self._kb_now = root, 0
+        self.style_editor = StyleEditor(self.chrome)
+        self.calendar_view = CalendarView(self)
         Clock.schedule_interval(self.track_keyboard, 0.15)
         return root
 
@@ -102,7 +96,7 @@ class AssistantApp(App):
         if abs(self._kb_now - kb) > 1:
             self._kb_now = kb
             # bottom padding (not an extra widget, which added layout spacing when closed)
-            self.root_box.padding = [dp(8), dp(8), dp(8), dp(8) + kb]
+            self.chrome.set_keyboard(kb)
             self.scroll_bottom()  # keep the newest message visible above the input
 
     # ---------- startup ----------
@@ -122,8 +116,7 @@ class AssistantApp(App):
             self.say("Startup failed: %s: %s" % (type(e).__name__, e), "sys")
             return
         self.status.text = "Parser: %s" % self.asst.backend.name
-        self.say("Hello! Try: 'Remember ...', 'Note: ...', 'Call mummy from sim 1', "
-                 "'Show photos from yesterday'.", "sys")
+        self.chrome.refresh_hero()  # the greeting (with example prompts) replaces the old hello message
 
     def request_calendar_permission(self):
         try:
@@ -142,7 +135,8 @@ class AssistantApp(App):
 
     # ---------- helpers ----------
     def say(self, text, who="bot"):
-        self.log.add_widget(Msg(text, who))
+        self.log.add_widget(Bubble(text, who))
+        self.chrome.refresh_hero()
         self.scroll_bottom()
 
     def scroll_bottom(self):
@@ -152,8 +146,7 @@ class AssistantApp(App):
             Clock.schedule_once(lambda *_: setattr(self.sv, "scroll_y", 0), delay)
 
     def set_input(self, on):
-        self.entry.disabled = not on
-        self.send_btn.disabled = not on
+        self.chrome.set_input_enabled(on)
 
     def show_card(self, text):
         self.card_text.text = text
@@ -183,7 +176,7 @@ class AssistantApp(App):
             self.asst.reject(self.pending[0])
             self.hide_card()
         self.entry.text = ""
-        self.say("> " + text, "user")
+        self.say(text, "user")
         self.working = True
         self.set_input(False)
         self.status.text = "thinking..."
@@ -224,8 +217,8 @@ class AssistantApp(App):
         self._live_buttons = btns
 
         def make(label, fn):
-            b = Button(text=label, size_hint_y=None, height=dp(44), halign="left")
-            b.bind(size=lambda w, *_: setattr(w, "text_size", (w.width - dp(16), None)))
+            b = ThemedButton(text=label, mode="text", wide=True, halign="left", fixed_stack="side",
+                             size_hint_x=1, height=dp(44))
 
             def on(*_):
                 for x in btns:
@@ -241,7 +234,7 @@ class AssistantApp(App):
         self.scroll_bottom()
 
     def pick_contact(self, i):
-        self.say("> %d" % (i + 1), "user")
+        self.say("Option %d" % (i + 1), "user")
         self.run_bg(lambda: self.asst.choose_contact(i), self.on_reply)
 
     def open_photo(self, pid):
@@ -280,15 +273,36 @@ class AssistantApp(App):
     def on_result(self, res):
         self.say("Error: %s" % type(res).__name__ if isinstance(res, Exception) else res.text)
 
+    # ---------- header / input buttons that are not chat features ----------
+    def show_style(self):
+        self.style_editor.open()
+
+    # Voice and Mic are slots in the layout. This repo has no speech backend, so they call an optional
+    # hook: set `app.voice_input = fn(entry)` (recognised text -> entry.text) and `app.voice_settings = fn()`
+    # (for example a speech engine). Without a hook they say so instead of silently doing nothing.
+    def on_mic(self):
+        hook = getattr(self, "voice_input", None)
+        if hook:
+            hook(self.entry)
+        else:
+            self.say("Voice input is not connected in this build.", "sys")
+
+    def on_voice(self):
+        hook = getattr(self, "voice_settings", None)
+        if hook:
+            hook()
+        else:
+            self.say("Voice settings are not connected in this build.", "sys")
+
     # ---------- saved data ----------
     def popup(self, title, body):
         sv = ScrollView()
         sv.add_widget(body)
         outer = BoxLayout(orientation="vertical", spacing=dp(6))
         outer.add_widget(sv)
-        close = Button(text="Close", size_hint_y=None, height=dp(44))
+        close = ThemedButton(text="Close", icon="check", size_hint_x=1, height=dp(44))
         outer.add_widget(close)
-        p = Popup(title=title, content=outer, size_hint=(0.95, 0.85))
+        p = style_popup(Popup(title=title, content=outer, size_hint=(0.95, 0.85)))
         close.bind(on_release=lambda *_: p.dismiss())
         p.open()
         return p
@@ -304,17 +318,18 @@ class AssistantApp(App):
             box.clear_widgets()
             prefs = self.asst.list_preferences()
             if not prefs:
-                box.add_widget(Label(text="No saved preferences.", size_hint_y=None, height=dp(40)))
+                box.add_widget(style_label(Label(text="No saved preferences.", size_hint_y=None, height=dp(40))))
             for p in prefs:
                 r = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(4))
-                ti = TextInput(text=p["text"], multiline=False)
+                ti = style_input(TextInput(text=p["text"], multiline=False, padding=[dp(8), dp(12)]))
                 r.add_widget(ti)
-                r.add_widget(Button(text="Save", size_hint_x=None, width=dp(60),
-                                    on_release=lambda _b, i=p["id"], t=ti: (self.asst.update_preference(i, t.text.strip()), refresh())))
-                r.add_widget(Button(text="Del", size_hint_x=None, width=dp(50),
-                                    on_release=lambda _b, i=p["id"]: (self.asst.delete_record(i), refresh())))
+                r.add_widget(ThemedButton(text="Save", icon="check", mode="icon", height=dp(44), size_hint_x=None, width=dp(52),
+                                          on_release=lambda _b, i=p["id"], t=ti: (self.asst.update_preference(i, t.text.strip()), refresh())))
+                r.add_widget(ThemedButton(text="Del", icon="trash", mode="icon", height=dp(44), size_hint_x=None, width=dp(52),
+                                          on_release=lambda _b, i=p["id"]: (self.asst.delete_record(i), refresh())))
                 box.add_widget(r)
-            wipe = Button(text="Delete ALL my data", size_hint_y=None, height=dp(44))
+            wipe = ThemedButton(text="Delete ALL my data", icon="trash", mode="icon_text", fixed_stack="side",
+                                size_hint_x=1, height=dp(44))
 
             def confirm(b):
                 if b.text.startswith("Delete ALL"):
@@ -323,33 +338,31 @@ class AssistantApp(App):
                     self.asst.delete_all_data()
                     self.say("All data deleted.", "sys")
                     pop.dismiss()
-            wipe.bind(on_release=confirm)
+            wipe.bind(on_release=confirm)  # (the label text is what `confirm` checks)
             box.add_widget(wipe)
         refresh()
 
-    def show_tasks(self):
+    def show_calendar(self):
+        """Month view + agenda of the in-app tasks (replaces the old Tasks list; tasks can be deleted there)."""
         if not self.asst:
+            self.say("The assistant is not ready, so there are no tasks to show.", "sys")
             return
+        self.calendar_view.open()
+
+    def show_status(self):
+        """Tap the avatar: what the assistant is doing right now (the old status line)."""
+        self.popup("Status", style_label(Label(text=self.status.text, size_hint_y=None, height=dp(60), halign="left",
+                                               text_size=(dp(240), None))))
+
+    def show_quick(self):
+        """The + button: example prompts that fill the typing box."""
         box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
         box.bind(minimum_height=box.setter("height"))
-        self.popup("Tasks (in-app)", box)
-
-        def refresh():
-            box.clear_widgets()
-            tasks = self.asst.list_tasks()
-            if not tasks:
-                box.add_widget(Label(text="No tasks.", size_hint_y=None, height=dp(40)))
-            for t in tasks:
-                r = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(4))
-                state = "calendar screen opened" if t.get("calendar") == "handed_off" else t.get("calendar", "")
-                lb = Label(text="%s\n%s [%s]" % (t["title"], t["start_iso"][:16].replace("T", " "), state),
-                           halign="left")
-                lb.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
-                r.add_widget(lb)
-                r.add_widget(Button(text="Del", size_hint_x=None, width=dp(50),
-                                    on_release=lambda _b, i=t["id"]: (self.asst.delete_record(i), refresh())))
-                box.add_widget(r)
-        refresh()
+        pop = self.popup("Quick prompts", box)
+        for label, fill in SUGGESTIONS:
+            b = ThemedButton(text=label, mode="text", wide=True, halign="left", size_hint_x=1, height=dp(46))
+            b.bind(on_release=lambda _b, f=fill: (pop.dismiss(), self.chrome.fill_entry(f)))
+            box.add_widget(b)
 
 
 if __name__ == "__main__":

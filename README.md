@@ -1,4 +1,4 @@
-# Local Assistant: hackathon prototype
+# Pacsit: hackathon prototype
 
 Local-first Android assistant: Kivy UI, Python core, encrypted SQLite, approval-gated device actions.
 **Prototype, not production-ready.** See `docs/FEASIBILITY.md` for risks and status labels.
@@ -46,7 +46,13 @@ Found on the phone and fixed: "Delete ALL my data" left deleted rows in SQLite f
 chat did not auto-scroll after long lists; stale photo lists stayed tappable.
 
 ## Folder structure
-    main.py                 Kivy UI (one screen)
+    main.py                 Kivy app (one screen): chat, proposal card, pop-ups
+    pa_ui/                  Pacsit look + customisation (see "Look and customisation")
+      themes.py             8 themes, 9 backgrounds, contrast checks
+      config.py             saved GUI settings (theme, layout, button placement)
+      iconset.py            vector icons (no font or emoji needed)
+      calendar_logic.py     month grid + task grouping
+      widgets.py chrome.py pacsit_widgets.py editor.py calendar_view.py   Kivy parts
     buildozer.spec          APK build config
     pa/
       bootstrap.py          wires key -> crypto -> store -> assistant
@@ -62,11 +68,12 @@ chat did not auto-scroll after long lists; stale photo lists stayed tappable.
       adapters/base.py      adapter interface + UnsupportedAdapter
       adapters/calendar.py  Android calendar adapter
     tests/test_pa.py        unit + acceptance tests (mocks marked TEST-ONLY)
+    tests/test_ui_config.py themes, backgrounds, config, calendar tests (no window needed)
     docs/FEASIBILITY.md
 
 ## Run tests (Windows / any OS)
     pip install cryptography pycryptodome
-    python tests/test_pa.py
+    python -m unittest discover -s tests
 
 ## Run UI on desktop
 Desktop has no Android Keystore, so you must opt in to an **insecure** dev key:
@@ -76,6 +83,30 @@ Desktop has no Android Keystore, so you must opt in to an **insecure** dev key:
     python main.py
 
 Calendar actions report "not available" on desktop (correct behaviour).
+
+## Look and customisation
+The screen is a dark, glowing design: wave logo and **Pacsit** title with a tagline pill, a menu
+button (top corner), a status avatar (tap it to see what the assistant is doing; the dot is green when ready,
+amber when busy, red on an error), a greeting with an animated orb while the chat is empty, chat bubbles,
+and a rounded typing bar (`+` quick prompts, text box, mic, send).
+
+- **Menu button**: Theme, Calendar, Preferences, Voice. Calendar shows a month grid with dots on days that
+  have tasks and the day's agenda (tasks can be deleted there; "Open phone calendar" works on Android only).
+- **Theme** (menu > Theme), changes apply live and are saved on the phone:
+  - *Themes*: Violet (default), Ocean, Emerald, Rose, Amber, Graphite, Daylight (light), High contrast, plus your own.
+  - *Background colour*: 9 backdrops for the dark themes (Deep violet, Midnight blue, AMOLED black, Graphite,
+    Forest night, Wine, Deep teal, Slate, Ember) or the theme's own.
+  - *Colours*: every colour can be edited (hex or colour wheel) with a contrast warning.
+  - *Layout*: quick layouts (Pacsit, Minimal, Big touch, Left-handed, Typing bar on top), title alignment,
+    menu side, typing bar position, greeting on/off, bubbles or plain text, sliders for sizes.
+  - *Buttons*: for every button choose its icon and name, move it earlier/later, and put it in the Menu,
+    before/after the text box, or hide it. The Theme entry can never be hidden.
+- Settings live in `ui_config.json` in the app's private folder; a damaged file is kept as `.bad` and
+  defaults are used. Colour changes never touch the assistant core (`pa/`).
+- Mic and Voice call optional hooks (`app.voice_input`, `app.voice_settings`); without them they say
+  "not connected in this build". This repo has no speech engine.
+- Renaming note: the APK package is now `org.pa.pacsit` (was `org.pa.localassistant`), so it installs as a
+  new app and does not share the old app's encrypted data.
 
 ## Build APK (WSL2 Ubuntu)
     sudo apt install -y python3-venv git zip unzip openjdk-17-jdk build-essential \
