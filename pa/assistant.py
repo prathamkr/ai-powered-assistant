@@ -25,6 +25,27 @@ def _national(num):
         d = d[1:]
     return d
 
+_ORDINALS = {1: "one first 1st ek pehla pehli pehle pahla", 2: "two second 2nd do dusra dusri dusre doosra",
+             3: "three third 3rd teen teesra teesri tisra", 4: "four fourth 4th char chaar chautha chauthi",
+             5: "five fifth 5th paanch panch paanchva"}
+_ORD_WORD = {w: n for n, ws in _ORDINALS.items() for w in ws.split()}
+_CHOICE_FILLER = set("number no option the wala wali wale ko call karo please plz one".split())
+
+
+def _choice_number(text):
+    """Answer to a 'which one?' list, typed or spoken: '2', 'two', 'second one', 'dusra wala'."""
+    words = re.findall(r"\w+", text.lower())
+    if not words or len(words) > 4:
+        return None
+    nums = [int(w) if w.isdigit() else _ORD_WORD.get(w) for w in words]
+    hits = [n for n in nums if n]
+    # 'one' is a filler in 'second one', but alone it means 1
+    if len(hits) > 1 and 1 in hits and "one" in words:
+        hits = [n for n, w in zip(nums, words) if n and w != "one"]
+    rest = [w for w, n in zip(words, nums) if not n and w not in _CHOICE_FILLER]
+    return hits[0] if len(hits) == 1 and not rest else None
+
+
 TEMP_RE = re.compile(r"\b(aaj ke liye|sirf aaj|just for today|for today|abhi ke liye|temporarily)\b", re.I)
 TOD = (("morning", r"\b(subah|morning)\b"), ("afternoon", r"\b(dopahar|afternoon)\b"),
        ("evening", r"\b(shaam|sham|evening)\b"))
@@ -66,8 +87,9 @@ class Assistant:
         if not text:
             return Response("error", "Please type something.")
         now = self.clock()
-        if self._choices and text.isdigit():
-            return self.choose_contact(int(text) - 1)
+        pick = _choice_number(text) if self._choices else None
+        if pick:
+            return self.choose_contact(pick - 1)
         self._choices = None
         if self._pending is not None and hasattr(self.backend, "followup"):
             extra = self.backend.followup(text)

@@ -349,7 +349,7 @@ class Status(EventDispatcher):
         v = value.lower()
         if v.startswith(("error", "blocked")):
             self.level = "error"
-        elif v.startswith(("thinking", "starting")):
+        elif v.startswith(("thinking", "starting", "listening", "recognizing")):
             self.level = "busy"
         else:
             self.level = "ok"

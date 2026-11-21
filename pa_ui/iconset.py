@@ -80,6 +80,7 @@ ICONS = {
               L(_arc(0.5, 0.52, 0.22, 205, 335))],
     "wave": [L([(0.08, 0.44), (0.08, 0.56)]), L([(0.29, 0.28), (0.29, 0.72)]), L([(0.5, 0.1), (0.5, 0.9)]),
              L([(0.71, 0.28), (0.71, 0.72)]), L([(0.92, 0.44), (0.92, 0.56)])],
+    "stop": [L([(0.26, 0.26), (0.74, 0.26), (0.74, 0.74), (0.26, 0.74)], True)],
     "none": [],
     # used by the editor itself (not offered in the icon picker)
     "left": [L([(0.62, 0.82), (0.34, 0.5), (0.62, 0.18)])],
@@ -87,5 +88,5 @@ ICONS = {
     "close": [L([(0.22, 0.22), (0.78, 0.78)]), L([(0.22, 0.78), (0.78, 0.22)])],
 }
 
-EDITOR_ONLY = ("left", "right", "close")
+EDITOR_ONLY = ("left", "right", "close", "stop")
 CHOOSABLE = [n for n in ICONS if n not in EDITOR_ONLY]

@@ -1,4 +1,5 @@
 """Lazey: single-screen Kivy UI for the local assistant prototype."""
+import os
 import threading
 
 from kivy.app import App
@@ -9,8 +10,12 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
+from kivy.uix.slider import Slider
 from kivy.uix.textinput import TextInput
 
+from pa import voice as V
+from pa.adapters import android_util as au
+from pa.adapters.voice_android import AndroidVoice
 from pa.bootstrap import KeyUnavailable, build_assistant
 from pa_ui.calendar_view import CalendarView
 from pa_ui.chrome import Chrome
@@ -61,6 +66,11 @@ class AssistantApp(App):
         btns.add_widget(self.reject_btn)
         self.card.add_widget(self.card_text)
         self.card.add_widget(btns)
+
+        self.voice = AndroidVoice(lambda kind, value: Clock.schedule_once(
+            lambda *_: self.on_voice_event(kind, value), 0))  # engine callbacks -> UI thread
+        self.vset = V.VoiceSettings()
+        self._from_voice = False
 
         self.entry = TextInput(multiline=False, hint_text="Message %s..." % APP_NAME, write_tab=False)
         self.entry.bind(on_text_validate=lambda *_: self.send())
@@ -115,6 +125,7 @@ class AssistantApp(App):
             self.status.text = "ERROR"
             self.say("Startup failed: %s: %s" % (type(e).__name__, e), "sys")
             return
+        self.vset = V.load_settings(self.voice_path())
         self.status.text = "Parser: %s" % self.asst.backend.name
         self.chrome.refresh_hero()  # the greeting (with example prompts) replaces the old hello message
 
@@ -168,10 +179,14 @@ class AssistantApp(App):
         threading.Thread(target=work, daemon=True).start()
 
     # ---------- chat ----------
-    def send(self):
+    def send(self, from_voice=False):
         text = self.entry.text.strip()
         if not text or self.working or self.asst is None:
             return
+        self._from_voice = from_voice
+        if self.voice.is_listening():
+            self.voice.cancel_listening()
+        self.voice.stop_speaking()
         if self.pending:  # a newer message supersedes an unanswered proposal
             self.asst.reject(self.pending[0])
             self.hide_card()
@@ -189,6 +204,7 @@ class AssistantApp(App):
         if isinstance(res, Exception):
             self.say("Error: %s" % type(res).__name__, "sys")
             return
+        self.speak_reply(res)
         if res.kind == "proposal":
             self.pending = (res.action_id, res.action_hash)
             self.show_card(res.text)
@@ -272,27 +288,164 @@ class AssistantApp(App):
 
     def on_result(self, res):
         self.say("Error: %s" % type(res).__name__ if isinstance(res, Exception) else res.text)
+        if not isinstance(res, Exception):
+            self.speak_reply(res)
 
     # ---------- header / input buttons that are not chat features ----------
     def show_style(self):
         self.style_editor.open()
 
-    # Voice and Mic are slots in the layout. This repo has no speech backend, so they call an optional
-    # hook: set `app.voice_input = fn(entry)` (recognised text -> entry.text) and `app.voice_settings = fn()`
-    # (for example a speech engine). Without a hook they say so instead of silently doing nothing.
+    # ---------- voice (engine: pa/voice.py + pa/adapters/voice_android.py) ----------
+    def voice_path(self):
+        return os.path.join(self.user_data_dir, "voice.json")
+
+    def speak_reply(self, res):
+        if not V.should_speak(self.vset.speak_mode, self._from_voice):
+            return
+        text = V.speakable(res.text)
+        if res.kind == "choose" and res.options:
+            # read the names, not the numbers: "Option 1, Rahul Sharma."
+            names = [o.split(". ", 1)[-1].rsplit(" (", 1)[0] for o in res.options]
+            text += " " + " ".join("Option %d, %s." % (i + 1, n) for i, n in enumerate(names))
+        if res.kind == "proposal":
+            text += " Tap Approve or Reject."
+        self.voice.speak(text, self.vset)
+
     def on_mic(self):
-        hook = getattr(self, "voice_input", None)
-        if hook:
-            hook(self.entry)
-        else:
-            self.say("Voice input is not connected in this build.", "sys")
+        """The mic button: start listening, or finish now and use what was heard."""
+        if self.asst is None or self.working:
+            return
+        if not self.voice.available():
+            self.say("Voice input works only on the phone.", "sys")
+            return
+        if self.voice.is_listening():
+            self.voice.stop_listening()
+            return
+        if not self.voice.mic_allowed():
+            self.ask_mic_permission()
+            return
+        self.voice.start_listening(self.vset.prefer_offline)
+        self.chrome.set_listening(True)
+        self.status.text = "Listening... (%s)" % self.voice.recognizer_label()
+
+    def ask_mic_permission(self):
+        try:
+            from android.permissions import request_permissions  # type: ignore
+
+            def cb(_perms, grants):
+                ok = any(grants)
+                Clock.schedule_once(lambda *_: self.on_mic() if ok else self.say(
+                    "Microphone permission was not given, so voice input is off. "
+                    "You can still type.", "sys"), 0)
+            request_permissions([au.RECORD_AUDIO], cb)
+        except Exception:
+            self.say("Cannot ask for permissions on this device.", "sys")
+
+    def on_voice_event(self, kind, value):
+        if kind == "partial":
+            self.entry.text = value
+            return
+        if kind == "ready":
+            self.status.text = "Listening... (%s)" % self.voice.recognizer_label()
+            return
+        if kind == "processing":
+            self.status.text = "Recognizing..."
+            return
+        if kind == "info":
+            self.say(value, "sys")
+            return
+        # final / nospeech / error / idle: listening is over
+        self.chrome.set_listening(False)
+        if self.asst is not None and not self.working:
+            self.status.text = "Parser: %s" % self.asst.backend.name
+        if kind == "final":
+            self.entry.text = value
+            self.send(from_voice=True)
+        elif kind == "nospeech":
+            self.entry.text = ""
+            self.say("I did not hear anything. Tap the mic and try again.", "sys")
+        elif kind == "error":
+            self.say(value, "sys")
 
     def on_voice(self):
-        hook = getattr(self, "voice_settings", None)
-        if hook:
-            hook()
-        else:
-            self.say("Voice settings are not connected in this build.", "sys")
+        """Menu > Voice: when to speak replies, which voice, pitch and speed, test, offline preference."""
+        box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
+        box.bind(minimum_height=box.setter("height"))
+        self.popup("Voice", box)
+        s = self.vset
+
+        def label(text, h=30, role="text"):
+            lb = Label(text=text, size_hint_y=None, height=dp(h), halign="left", valign="middle")
+            lb.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
+            box.add_widget(style_label(lb, role))
+            return lb
+
+        def save():
+            try:
+                V.save_settings(self.voice_path(), s)
+            except OSError:
+                pass
+
+        def chips(options, current, pick):
+            row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+            for value, name in options:
+                b = ThemedButton(text=name, mode="text", size_hint_x=1, height=dp(42), font_px=13,
+                                 kind="selected" if value == current else "normal")
+                b.bind(on_release=lambda _b, v=value: (pick(v), save(), refresh()))
+                row.add_widget(b)
+            box.add_widget(row)
+
+        def refresh():
+            box.clear_widgets()
+            label("Listening: %s, language %s" % (self.voice.recognizer_label() if self.voice.available()
+                                                   else "not available here", V.LANGUAGE), 40, "muted")
+            label("Speak replies")
+            chips((("voice", "After voice"), ("always", "Always"), ("off", "Off")), s.speak_mode,
+                  lambda m: setattr(s, "speak_mode", m))
+            label("Voice")
+            for p in V.PROFILES:
+                b = ThemedButton(text="%s  -  %s" % (p.name, p.tagline), icon="speaker", wide=True, halign="left",
+                                 size_hint_x=1, height=dp(46), font_px=13,
+                                 kind="selected" if p.id == s.profile_id else "normal")
+                b.bind(on_release=lambda _b, pid=p.id: (s.use_profile(pid), save(), refresh()))
+                box.add_widget(b)
+            for attr, title, lo, hi in (("pitch", "Pitch", V.PITCH_MIN, V.PITCH_MAX),
+                                        ("rate", "Speed", V.RATE_MIN, V.RATE_MAX)):
+                lb = label("%s: %.2f" % (title, getattr(s, attr)))
+                sl = Slider(min=lo, max=hi, value=getattr(s, attr), size_hint_y=None, height=dp(36),
+                            value_track=True, value_track_color=T.c("accent"))
+
+                def changed(_w, v, attr=attr, title=title, lb=lb):
+                    setattr(s, attr, round(v, 2))
+                    lb.text = "%s: %.2f" % (title, v)
+                sl.bind(value=changed)
+                sl.bind(on_touch_up=lambda w, t: save() if w.collide_point(*t.pos) else None)
+                box.add_widget(sl)
+            row2 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+            test = ThemedButton(text="Test voice", icon="speaker", size_hint_x=1, height=dp(46), font_px=13)
+            test.bind(on_release=lambda *_: self.voice.speak("Hello! This is how I will read my replies.", s))
+            stop = ThemedButton(text="Stop", icon="close", size_hint_x=1, height=dp(46), font_px=13)
+            stop.bind(on_release=lambda *_: self.voice.stop_speaking())
+            row2.add_widget(test)
+            row2.add_widget(stop)
+            box.add_widget(row2)
+            label("Recognition")
+            chips(((True, "Prefer offline"), (False, "Online allowed")), s.prefer_offline,
+                  lambda v: setattr(s, "prefer_offline", v))
+            if self.voice.tts_voice != "-":
+                label("Last voice used: %s" % self.voice.tts_voice, 36, "muted")
+        refresh()
+
+    def on_pause(self):
+        self.voice.pause()  # release the mic and stop speaking in the background
+        self.chrome.set_listening(False)
+        return True
+
+    def on_resume(self):
+        pass
+
+    def on_stop(self):
+        self.voice.release()
 
     # ---------- saved data ----------
     def popup(self, title, body):

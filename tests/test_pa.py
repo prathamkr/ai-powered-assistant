@@ -639,5 +639,71 @@ class Acceptance(unittest.TestCase):
         self.assertEqual((a.list_preferences(), store.all("note")), ([], []))
 
 
+class Voice(unittest.TestCase):
+    def test_chunker_splits_sentences_and_cleans_markup(self):
+        from pa.voice import chunk
+        self.assertEqual(chunk(""), [])
+        parts = chunk("**Hello** there, this is a longer first sentence. Dr. Rao called at 5 pm. "
+                      "See https://example.com now!\n\nNew paragraph here.")
+        texts = [t for t, _ in parts]
+        self.assertTrue(all("**" not in t and "http" not in t for t in texts))
+        self.assertIn("Dr. Rao called at 5 pm.", " ".join(texts))  # no split after 'Dr.'
+        self.assertTrue(any(end for _, end in parts))               # paragraph pause kept
+        self.assertFalse(parts[-1][1])                              # no pause after the last one
+        long = chunk("word, " * 200)
+        self.assertTrue(all(len(t) <= 260 for t, _ in long))
+
+    def test_settings_roundtrip_and_untrusted_file(self):
+        from pa import voice as V
+        path = os.path.join(tempfile.mkdtemp(), "voice.json")
+        self.assertEqual(V.load_settings(path).profile_id, "nova")  # missing file -> defaults
+        s = V.VoiceSettings()
+        s.use_profile("atlas")
+        s.speak_mode = "always"
+        V.save_settings(path, s)
+        t = V.load_settings(path)
+        self.assertEqual((t.profile_id, t.pitch, t.speak_mode), ("atlas", 0.84, "always"))
+        with open(path, "w") as f:
+            f.write('{"profile_id": "x", "pitch": 99, "rate": "fast", "speak_mode": "loud", "evil": 1}')
+        t = V.load_settings(path)
+        self.assertEqual((t.profile_id, t.speak_mode), ("nova", "voice"))
+        self.assertLessEqual(t.pitch, V.PITCH_MAX)
+        with open(path, "w") as f:
+            f.write("not json")
+        self.assertEqual(V.load_settings(path).profile_id, "nova")
+
+    def test_speak_modes(self):
+        from pa.voice import should_speak, speakable
+        self.assertTrue(should_speak("voice", True))
+        self.assertFalse(should_speak("voice", False))
+        self.assertTrue(should_speak("always", False))
+        self.assertFalse(should_speak("off", True))
+        self.assertEqual(speakable("Sorry, I did not understand that. Parser: rule parser"),
+                         "Sorry, I did not understand that.")
+
+    def test_spoken_choice_picks_contact(self):
+        from pa.assistant import _choice_number
+        for text, n in (("2", 2), ("two", 2), ("second one", 2), ("dusra wala", 2), ("number 1", 1),
+                        ("one", 1), ("pehla", 1), ("Third.", 3)):
+            self.assertEqual(_choice_number(text), n, text)
+        for text in ("rahul", "1 2", "call rahul sharma please now", ""):
+            self.assertIsNone(_choice_number(text), text)
+        phone = FakePhone()
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), contacts=FakeContacts(BOOK), phone=phone)
+        self.assertEqual(a.handle("rahul ko call karo").kind, "choose")
+        a.handle("second one")
+        self.assertEqual(len(phone.calls), 1)
+
+    def test_android_voice_is_inert_on_desktop(self):
+        from pa.adapters.voice_android import AndroidVoice
+        events = []
+        v = AndroidVoice(lambda k, x: events.append(k))
+        self.assertFalse(v.available())
+        v.speak("hello", None)  # must not raise or touch Java
+        self.assertFalse(v.is_speaking())
+        v.pause()
+        self.assertEqual(events, [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

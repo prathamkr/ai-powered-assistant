@@ -25,6 +25,8 @@ time and IST timezone (discarded, not saved); the DB had no plaintext; delete-al
 | Kivy UI | Emulator: all screens used (chat, proposal card, Prefs, Tasks, delete-all) |
 | Call ("rahul 9876 ko sim 2 se call karo") | Unit-tested; phone: contacts lookup, number-prefix filter, SIM list with carrier name, wrong/empty SIM refused. A real call was **not** placed during testing |
 | Photo search ("kal ki photos", "pichle hafte ke screenshots") | Unit-tested; phone: permission deny/allow, correct date ranges, Open hands off to system viewer |
+| Voice: speak a command (Mic button) | Phone: mic permission prompt, listening, silence -> "I did not hear anything", mic released. en-IN refused offline (error 13) on the test phone, app fell back automatically |
+| Voice: replies read aloud (5 voice presets, pitch/speed) | Phone: speech playback confirmed in `dumpsys audio` (not judged by ear) |
 | On-device LLM | **Not implemented** |
 | Messages / Settings / Files adapters | **Unsupported** (never report success) |
 
@@ -34,6 +36,17 @@ contact matches the name (+ optional first 3-6 digits of the number) and the req
 (SIM not found, permission missing) and says "No call was made". Calls go through
 `TelecomManager.placeCall` with the SIM's PhoneAccountHandle. Audit logs
 `not_required:user_setting_direct_call`, never names or numbers.
+Voice (ported from the `add-pocketmind-voice` branch, its "Android fallback" path, in Python):
+**Mic** listens with the phone's own `SpeechRecognizer` (en-IN, so Hinglish comes out in Latin
+letters), then sends the text like a typed message. Replies are read with the phone's
+`TextToSpeech`, sentence by sentence. **Voice** button: speak replies (after voice / always / off),
+Nova/Atlas/Echo/Luna/Spark presets, pitch, speed, prefer-offline. Recognizer order: on-device ->
+phone recognizer offline -> phone recognizer online -> en-US -> phone language; the status line
+says which one is used. The phone recognizer **may send audio to Google**; the app itself has no
+INTERNET permission. Mic and speaker are never on together; both stop when the app is in the
+background. Settings are stored in `voice.json` (no personal data). Lists can be answered by voice
+("second one", "dusra wala"). The branch's sherpa-onnx offline engine was **not** ported
+(English-only recognizer, +100 MB).
 Photos: read-only, no approval needed; only photos from the latest search can be opened.
 Contacts/call/photos permissions are requested the first time the feature is used.
 

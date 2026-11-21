@@ -1,0 +1,6 @@
+    <!-- Android 11+ package visibility: let the app find the phone's speech recognizer and
+         text-to-speech engine (voice input / spoken replies). -->
+    <queries>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
+        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
+    </queries>

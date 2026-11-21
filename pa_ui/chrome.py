@@ -32,6 +32,7 @@ class Chrome:
         self.app, self.cfg, self.store = app, cfg, store
         self.buttons = {}
         self.input_enabled = True
+        self.listening = False   # the mic is open: its button turns into a stop button
         self.kb = 0   # on-screen keyboard height in px; the chat shrinks so the input stays above it
         self.root = BoxLayout(orientation="vertical")
         backdrop(self.root)
@@ -71,6 +72,18 @@ class Chrome:
             if bid in self.buttons:
                 self.buttons[bid].disabled = not on
 
+    def set_listening(self, on):
+        self.listening = bool(on)
+        self._mic_look()
+
+    def _mic_look(self):
+        btn = self.buttons.get("mic")
+        if btn is None:
+            return
+        icon = next((b["icon"] for b in self.cfg["buttons"] if b["id"] == "mic"), "mic")
+        btn.icon = "stop" if self.listening else icon
+        btn.kind = "accent" if self.listening else "flat"
+
     def refresh_hero(self):
         """Show the greeting while the chat is empty; the chat takes over with the first message."""
         empty = len(self.app.log.children) == 0
@@ -105,6 +118,8 @@ class Chrome:
         btn.disabled = (not self.input_enabled) and b["id"] in ("send", "mic", "plus")
         btn.pos_hint = {"center_y": 0.5}
         self.buttons[b["id"]] = btn
+        if b["id"] == "mic":
+            self._mic_look()
         return btn
 
     def _header(self, lay):
