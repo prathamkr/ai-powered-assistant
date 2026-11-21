@@ -30,6 +30,7 @@ GLYPHS = {
     "menu": "",       # menu
     "calendar": "",   # calendar_month
     "wave": "",       # graphic_eq
+    "edit": "",       # edit
     "none": "",
     # state and navigation icons
     "stop": "",       # stop

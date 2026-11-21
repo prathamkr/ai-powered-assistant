@@ -109,8 +109,8 @@ assistant says appear in the chat.
   Voice sets when replies are spoken (after voice, always, off) and which voice (Nova, Atlas, Echo, Luna,
   Spark; each voice brings its own pitch and speed). Recognition always prefers on-device. The mic button
   listens and turns into a stop button while it does.
-- **Quick prompts** (the `+` in the typing bar): tap a prompt to put it in the typing box, tap the bin to delete
-  it, or tap Add prompt to make your own (up to 30, 80 characters each, no duplicates). The list is remembered
+- **Quick prompts** (the `+` in the typing bar): tap a prompt to put it in the typing box; tap Edit to show a bin
+  beside each prompt (tap Done to hide them again); or tap Add prompt to make your own (up to 30, 80 characters each, no duplicates). The list is remembered
   in `quick_prompts.json` in the app's private folder; the starters are Remember, Note:, "Call mummy from sim 1"
   and "Show photos from yesterday".
 - **Theme** (menu > Theme): pick one of 8 themes by tapping its preview (Violet by default, Ocean, Emerald,

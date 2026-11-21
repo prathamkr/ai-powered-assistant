@@ -23,11 +23,14 @@ class QuickPromptsView:
         self.pop = None
         self.listbox = None
         self.sv = None
+        self.editing = False    # True: the bins are showing and tapping a prompt does not use it
+        self.edit_btn = None
 
     # ---------- the list ----------
     def open(self):
         if self.pop is not None:
             return
+        self.editing = False
         outer = BoxLayout(orientation="vertical", spacing=dp(8))
         # the top padding leaves a small gap between the title bar and the first prompt
         self.listbox = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8), padding=[0, dp(12), 0, dp(4)])
@@ -36,19 +39,33 @@ class QuickPromptsView:
         self.sv.add_widget(self.listbox)
         outer.add_widget(self.sv)
         foot = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
-        add = ThemedButton(text="Add prompt", icon="plus", kind="accent", size_hint_x=0.6, height=dp(46), font_px=13)
+        add = ThemedButton(text="Add prompt", icon="plus", kind="accent", size_hint_x=0.4, height=dp(46), font_px=12)
         add.bind(on_release=lambda *_: self.ask())
-        close = ThemedButton(text="Close", icon="check", size_hint_x=0.4, height=dp(46), font_px=13)
+        self.edit_btn = ThemedButton(text="Edit", icon="edit", size_hint_x=0.28, height=dp(46), font_px=12)
+        self.edit_btn.bind(on_release=lambda *_: self.toggle_edit())
+        close = ThemedButton(text="Close", icon="close", size_hint_x=0.32, height=dp(46), font_px=12)
         close.bind(on_release=lambda *_: self.pop.dismiss())
-        foot.add_widget(add)
-        foot.add_widget(close)
+        for w in (add, self.edit_btn, close):
+            foot.add_widget(w)
         outer.add_widget(foot)
         self.pop = style_popup(Popup(title="Quick prompts", content=outer, size_hint=(0.95, 0.85)))
         self.pop.bind(on_dismiss=lambda *_: setattr(self, "pop", None))
         self.pop.open()
         self.refresh()
 
+    def toggle_edit(self):
+        """Edit on: bins appear next to the prompts. Edit off ("Done"): they go away again."""
+        if self.items:
+            self.editing = not self.editing
+        self.refresh()
+
     def refresh(self):
+        if not self.items:
+            self.editing = False        # nothing left to edit
+        self.edit_btn.text = "Done" if self.editing else "Edit"
+        self.edit_btn.icon = "check" if self.editing else "edit"
+        self.edit_btn.kind = "selected" if self.editing else "normal"
+        self.edit_btn.disabled = not self.items
         self.listbox.clear_widgets()
         if not self.items:
             lb = Label(text="No quick prompts yet. Tap Add prompt to make one.", size_hint_y=None, height=dp(60),
@@ -59,14 +76,18 @@ class QuickPromptsView:
             row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
             b = ThemedButton(text=it["label"], mode="text", wide=True, halign="center", size_hint_x=1, height=dp(48))
             b.bind(on_release=lambda _b, fill=it["fill"]: self.use(fill))
-            d = RoundIcon(diameter=40, icon="trash", kind="soft")
-            d.pos_hint = {"center_y": 0.5}
-            d.bind(on_release=lambda _d, idx=i: self.delete(idx))
+            b.disabled = self.editing          # while editing, tapping a prompt must not fill the typing box
             row.add_widget(b)
-            row.add_widget(d)
+            if self.editing:
+                d = RoundIcon(diameter=40, icon="trash", kind="soft")
+                d.pos_hint = {"center_y": 0.5}
+                d.bind(on_release=lambda _d, idx=i: self.delete(idx))
+                row.add_widget(d)
             self.listbox.add_widget(row)
 
     def use(self, fill):
+        if self.editing:
+            return
         if self.pop:
             self.pop.dismiss()
         self.app.chrome.fill_entry(fill)
