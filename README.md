@@ -31,7 +31,7 @@ time and IST timezone (discarded, not saved); the DB had no plaintext; delete-al
 Call (user's choice: **no Approve tap**): the call is placed immediately when exactly one
 contact matches the name (+ optional first 3-6 digits of the number) and the requested SIM
 (`sim 1`, `dusri sim`, `airtel se`) exists. Otherwise it asks (several matches) or refuses
-(SIM not found, permission missing) and says "Kuch call nahi hua". Calls go through
+(SIM not found, permission missing) and says "No call was made". Calls go through
 `TelecomManager.placeCall` with the SIM's PhoneAccountHandle. Audit logs
 `not_required:user_setting_direct_call`, never names or numbers.
 Photos: read-only, no approval needed; only photos from the latest search can be opened.
@@ -96,8 +96,8 @@ No model or dependency is downloaded at runtime.
 - `kal ki photos dikhao` / `aaj ki photos` / `pichle hafte ke screenshots dikhao` / `camera ki photos`
 
 ## Demo checklist (acceptance scenario)
-1. `Yaad rakho mujhe subah kaam karna pasand hai.` -> "Preference save ho gayi"
-2. `Note karo: project report mein budget section add karna hai` -> "Note save ho gaya"
+1. `Yaad rakho mujhe subah kaam karna pasand hai.` -> "Preference saved"
+2. `Note karo: project report mein budget section add karna hai` -> "Note saved"
 3. `Project report ke baare mein maine kya note kiya tha?` -> shows the note
 4. `Kal project par 45 minutes kaam karne ka time nikalo.` -> proposal card with exact time
 5. Tap **Approve** -> system calendar screen opens; message says event exists only after you tap Save

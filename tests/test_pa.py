@@ -221,7 +221,7 @@ class Calls(unittest.TestCase):
 
     def test_single_match_calls_immediately(self):
         r = self.a.handle("mummy ko call karo")
-        self.assertIn("call lag rahi hai", r.text)
+        self.assertIn("Calling ", r.text)
         self.assertEqual(self.phone.calls, [{"name": "Mummy", "number": "9000000001", "sim_slot": None}])
 
     def test_prefix_picks_the_right_contact(self):
@@ -264,15 +264,15 @@ class Calls(unittest.TestCase):
 
     def test_prefix_without_match_calls_nobody(self):
         r = self.a.handle("rahul 7000 ko call karo")
-        self.assertIn("nahi mila", r.text)
+        self.assertIn("No contact found", r.text)
         self.assertEqual(self.phone.calls, [])
 
     def test_ambiguous_name_asks_then_calls_choice(self):
         r = self.a.handle("rahul ko call karo")
         self.assertEqual((r.kind, len(r.options)), ("choose", 2))
-        self.assertIn("4 ank", r.text)
+        self.assertIn("first 4 digits", r.text)
         self.assertEqual(self.phone.calls, [])  # nothing before the user picks
-        self.assertIn("call lag rahi hai", self.a.handle("2").text)
+        self.assertIn("Calling ", self.a.handle("2").text)
         self.assertEqual(self.phone.calls[0]["number"], "98111 22233")
 
     def test_choice_keeps_requested_sim(self):
@@ -354,12 +354,12 @@ class Photos(unittest.TestCase):
     def test_keyword_and_all(self):
         self.assertEqual([i["id"] for i in self.a.handle("camera ki photos").items], [1, 3])
         self.assertEqual([i["id"] for i in self.a.handle("pichle hafte ke screenshots").items], [2])
-        self.assertIn("Koi photo nahi mili", self.a.handle("goa ki photos dikhao").text)
+        self.assertIn("No photos found", self.a.handle("goa ki photos dikhao").text)
 
     def test_open_only_listed_photo(self):
         self.a.handle("aaj ki photos")
         self.assertEqual(self.a.open_photo(3).kind, "error")  # not in last results
-        self.assertIn("khol di", self.a.open_photo(1).text)
+        self.assertIn("Opened the photo", self.a.open_photo(1).text)
         self.assertEqual(self.ph.opened, [1])
 
     def test_permission_denied_and_partial(self):
@@ -367,7 +367,7 @@ class Photos(unittest.TestCase):
         r = a.handle("aaj ki photos")
         self.assertEqual((r.kind, r.permissions), ("need_permission", ["android.permission.READ_MEDIA_IMAGES"]))
         a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), photos=FakePhotos(PICS, perm="partial"))
-        self.assertIn("access di hai", a.handle("aaj ki photos").text)
+        self.assertIn("you gave access to", a.handle("aaj ki photos").text)
 
     def test_audit_has_only_count(self):
         self.a.handle("camera ki photos")
@@ -486,7 +486,7 @@ class Backends(unittest.TestCase):
         os.environ["PA_ALLOW_INSECURE_DEV_KEY"] = "1"
         try:
             a = build_assistant(tempfile.mkdtemp())
-            self.assertIn("save ho gaya", a.handle("Note karo: hello world").text)
+            self.assertIn("Note saved", a.handle("Note karo: hello world").text)
             self.assertEqual(a.handle("Kal project par 45 minutes kaam karne ka time nikalo").kind, "need_info")
         finally:
             os.environ.pop("PA_ALLOW_INSECURE_DEV_KEY", None)
@@ -571,8 +571,8 @@ class Acceptance(unittest.TestCase):
         path = os.path.join(tempfile.mkdtemp(), "a.db")
         a, store, cal = make(path)
         # 1 preference, 2 note
-        self.assertIn("save ho gayi", a.handle("Yaad rakho mujhe subah kaam karna pasand hai.").text)
-        self.assertIn("save ho gaya", a.handle("Note karo: project report mein budget section add karna hai").text)
+        self.assertIn("Preference saved", a.handle("Yaad rakho mujhe subah kaam karna pasand hai.").text)
+        self.assertIn("Note saved", a.handle("Note karo: project report mein budget section add karna hai").text)
         # unrelated note must not outrank the right one
         a.handle("Note karo: doodh aur bread kharidna hai")
         # 3 retrieval
@@ -586,7 +586,7 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(cal.executed, [])  # nothing happens before approval
         # 5 approve exact action: honest hand-off wording
         out = a.approve(r.action_id, r.action_hash)
-        self.assertIn("Save dabayenge", out.text)
+        self.assertIn("tap Save there", out.text)
         self.assertEqual(len(cal.executed), 1)
         # 6 restart: data persists
         store.db.close()
@@ -605,7 +605,7 @@ class Acceptance(unittest.TestCase):
         a.reject(r.action_id)
         self.assertEqual(cal.executed, [])
         self.assertEqual(a.list_tasks(), [])
-        self.assertIn("pehle hi", a.approve(r.action_id, r.action_hash).text)
+        self.assertIn("already done", a.approve(r.action_id, r.action_hash).text)
         self.assertEqual(cal.executed, [])
 
     def test_asks_for_missing_constraint_without_preference(self):
@@ -619,7 +619,7 @@ class Acceptance(unittest.TestCase):
     def test_unknown_calendar_availability_is_disclosed(self):
         a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), FakeCalendar(busy=None))
         a.handle("Yaad rakho mujhe subah kaam karna pasand hai.")
-        self.assertIn("check nahi ho payi", a.handle("Kal project par 45 minutes kaam karne ka time nikalo.").text)
+        self.assertIn("could not check calendar availability", a.handle("Kal project par 45 minutes kaam karne ka time nikalo.").text)
 
     def test_unsupported_and_temporary(self):
         a, _, cal = make(os.path.join(tempfile.mkdtemp(), "a.db"))

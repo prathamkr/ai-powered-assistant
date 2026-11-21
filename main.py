@@ -67,7 +67,7 @@ class AssistantApp(App):
         self.card.add_widget(btns)
 
         row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
-        self.entry = TextInput(multiline=False, hint_text="Likhiye...", write_tab=False)
+        self.entry = TextInput(multiline=False, hint_text="Type here...", write_tab=False)
         self.entry.bind(on_text_validate=lambda *_: self.send())
         self.send_btn = Button(text="Send", size_hint_x=None, width=dp(70), on_release=lambda *_: self.send())
         row.add_widget(self.entry)
@@ -113,17 +113,17 @@ class AssistantApp(App):
         except KeyUnavailable as e:
             self.set_input(False)
             self.status.text = "BLOCKED: no encryption key"
-            self.say("Encrypted storage ke liye key nahi mili, isliye app data nahi khol sakti "
-                     "(plaintext fallback nahi hai). Detail: %s" % e, "sys")
+            self.say("No key was found for encrypted storage, so the app cannot open your data "
+                     "(there is no plaintext fallback). Detail: %s" % e, "sys")
             return
         except Exception as e:  # keep the UI alive and honest
             self.set_input(False)
             self.status.text = "ERROR"
-            self.say("Startup fail: %s: %s" % (type(e).__name__, e), "sys")
+            self.say("Startup failed: %s: %s" % (type(e).__name__, e), "sys")
             return
         self.status.text = "Parser: %s" % self.asst.backend.name
-        self.say("Namaste! Likho: 'Yaad rakho ...', 'Note karo: ...', "
-                 "'Kal project par 45 minutes kaam karne ka time nikalo'.", "sys")
+        self.say("Hello! Try: 'Remember ...', 'Note: ...', 'Call mummy from sim 1', "
+                 "'Show photos from yesterday'.", "sys")
 
     def request_calendar_permission(self):
         try:
@@ -134,8 +134,8 @@ class AssistantApp(App):
                 # touched from the main thread (TypeError seen on emulator otherwise).
                 if not all(grants):
                     Clock.schedule_once(lambda *_: self.say(
-                        "Calendar permission nahi mili: availability check nahi hogi "
-                        "(event ka screen phir bhi khul sakta hai).", "sys"), 0)
+                        "Calendar permission was not given: availability will not be checked "
+                        "(the event screen can still open).", "sys"), 0)
             request_permissions([Permission.READ_CALENDAR], cb)
         except Exception:
             pass  # desktop
@@ -186,7 +186,7 @@ class AssistantApp(App):
         self.say("> " + text, "user")
         self.working = True
         self.set_input(False)
-        self.status.text = "soch raha hoon..."
+        self.status.text = "thinking..."
         self.run_bg(lambda: self.asst.handle(text), self.on_reply)
 
     def on_reply(self, res):
@@ -256,11 +256,11 @@ class AssistantApp(App):
                 # The adapter's permission_check() makes the real decision on the next try.
                 ok = any(grants)
                 Clock.schedule_once(lambda *_: self.say(
-                    "Permission mil gayi. Ab apni baat dobara boliye." if ok else
-                    "Permission nahi mili, isliye yeh kaam nahi ho sakta. Kuch nahi badla.", "sys"), 0)
+                    "Permission granted. Please say your request again." if ok else
+                    "Permission was not given, so this cannot be done. Nothing changed.", "sys"), 0)
             request_permissions(list(perms), cb)
         except Exception:
-            self.say("Permission maangna is device par sambhav nahi.", "sys")
+            self.say("Cannot ask for permissions on this device.", "sys")
 
     def on_approve(self):
         if not self.pending:
@@ -304,7 +304,7 @@ class AssistantApp(App):
             box.clear_widgets()
             prefs = self.asst.list_preferences()
             if not prefs:
-                box.add_widget(Label(text="Koi preference saved nahi.", size_hint_y=None, height=dp(40)))
+                box.add_widget(Label(text="No saved preferences.", size_hint_y=None, height=dp(40)))
             for p in prefs:
                 r = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(4))
                 ti = TextInput(text=p["text"], multiline=False)
@@ -321,7 +321,7 @@ class AssistantApp(App):
                     b.text = "Tap again to confirm"
                 else:
                     self.asst.delete_all_data()
-                    self.say("Saara data delete ho gaya.", "sys")
+                    self.say("All data deleted.", "sys")
                     pop.dismiss()
             wipe.bind(on_release=confirm)
             box.add_widget(wipe)
@@ -338,7 +338,7 @@ class AssistantApp(App):
             box.clear_widgets()
             tasks = self.asst.list_tasks()
             if not tasks:
-                box.add_widget(Label(text="Koi task nahi.", size_hint_y=None, height=dp(40)))
+                box.add_widget(Label(text="No tasks.", size_hint_y=None, height=dp(40)))
             for t in tasks:
                 r = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(4))
                 state = "calendar screen opened" if t.get("calendar") == "handed_off" else t.get("calendar", "")

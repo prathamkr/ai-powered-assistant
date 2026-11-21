@@ -30,9 +30,9 @@ def propose_slot(day, duration, window, fixed_time, busy, now):
         h, m = map(int, fixed_time.split(":"))
         s = datetime.combine(day, time(h, m), tz)
         if s < now:
-            return {"ok": False, "reason": "Woh time nikal chuka hai."}
+            return {"ok": False, "reason": "That time has already passed."}
         if _overlaps(s, s + dur, busy):
-            return {"ok": False, "reason": "Us time par pehle se kuch hai."}
+            return {"ok": False, "reason": "Something is already planned at that time."}
         return {"ok": True, "start": s, "end": s + dur}
     lo, hi = config.WINDOWS[window]
     cur = datetime.combine(day, time(lo), tz)
@@ -47,4 +47,4 @@ def propose_slot(day, duration, window, fixed_time, busy, now):
         if not _overlaps(cur, cur + dur, busy):
             return {"ok": True, "start": cur, "end": cur + dur}
         cur += timedelta(minutes=config.STEP_MINUTES)
-    return {"ok": False, "reason": "%s mein %d minute ka khaali slot nahi mila." % (window, duration)}
+    return {"ok": False, "reason": "No free %d-minute slot in the %s." % (duration, window)}
