@@ -179,10 +179,24 @@ class Hero(BoxLayout):
     def _tint(self, *_):
         self.hey.color = themes.hex_to_rgba(themes.mix(T.h("text"), T.h("accent"), 0.45))
 
+    shown = True
+
     def show(self, on):
+        # Hidden = invisible AND out of the way of touches. (It used to be disabled instead, and a
+        # disabled Kivy widget swallows every touch on it: the hidden greeting sat over the chat and
+        # ate taps on chat buttons, e.g. the first tap while the keyboard was open.)
+        self.shown = bool(on)
         self.opacity = 1 if on else 0
-        self.disabled = not on
         self.orb.active = bool(on)
+
+    def on_touch_down(self, touch):
+        return super().on_touch_down(touch) if self.shown else False
+
+    def on_touch_move(self, touch):
+        return super().on_touch_move(touch) if self.shown else False
+
+    def on_touch_up(self, touch):
+        return super().on_touch_up(touch) if self.shown else False
 
 
 class Bubble(BoxLayout):

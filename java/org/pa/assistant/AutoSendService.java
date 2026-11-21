@@ -18,6 +18,30 @@ import java.util.List;
  * Only WhatsApp packages are delivered to this service (res/xml/autosend_service.xml).
  */
 public class AutoSendService extends AccessibilityService {
+    /** True while Android has this service connected (it runs in the app's own process). The most
+     *  direct answer to "is auto-send on?": on the test phone, after the Accessibility settings
+     *  screen had been opened, the app's view of the stored setting read back '' for a while
+     *  although the service was on and bound. */
+    static volatile boolean connected = false;
+
+    @Override
+    protected void onServiceConnected() {
+        super.onServiceConnected();
+        connected = true;
+    }
+
+    @Override
+    public boolean onUnbind(Intent intent) {
+        connected = false;
+        return super.onUnbind(intent);
+    }
+
+    @Override
+    public void onDestroy() {
+        connected = false;
+        super.onDestroy();
+    }
+
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (!AutoSend.armed(this)) return;

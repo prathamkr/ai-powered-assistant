@@ -30,7 +30,6 @@ from pa.bootstrap import KeyUnavailable, build_assistant  # noqa: E402
 from pa_ui.calendar_view import CalendarView  # noqa: E402
 from pa_ui.chrome import Chrome  # noqa: E402
 from pa_ui.config import APP_NAME, ConfigStore  # noqa: E402
-from pa_ui.editor import StyleEditor  # noqa: E402
 from pa_ui.lazey_widgets import Bubble  # noqa: E402
 from pa_ui.quick_view import QuickPromptsView  # noqa: E402
 from pa_ui.widgets import Status, T, ThemedButton, style_input, style_label, style_popup, surface  # noqa: E402
@@ -91,9 +90,15 @@ class AssistantApp(App):
         # Chrome puts the header, greeting and typing bar around these widgets, per the saved layout.
         root = self.chrome.assemble(self.status, self.sv, self.card, self.entry)
         self.root_box, self._kb_now = root, 0
-        self.style_editor = StyleEditor(self.chrome)
         self.calendar_view = CalendarView(self)
         self.quick_view = QuickPromptsView(self)
+        # The keyboard check costs 2-14 ms of JNI on the UI thread (measured on the phone): run every
+        # 0.15 s it dropped a frame each time and made the chat scroll stutter. So it runs only while
+        # the keyboard can be open or is closing: typing box focused, keyboard still up, or a moment
+        # after the focus changed.
+        self._kb_jni = None
+        self._kb_watch_until = Clock.get_time() + 2.0
+        self.entry.bind(focus=lambda *_: setattr(self, "_kb_watch_until", Clock.get_time() + 2.0))
         Clock.schedule_interval(self.track_keyboard, 0.15)
         return root
 
@@ -101,18 +106,24 @@ class AssistantApp(App):
         """On-screen keyboard height in pixels (0 when closed or not on Android).
         Measured from the window's visible frame: its bottom edge moves up by the keyboard
         height. The largest bottom seen is the keyboard-closed baseline."""
-        try:
-            from jnius import autoclass  # type: ignore
-            from android import mActivity  # type: ignore
-        except Exception:
+        if self._kb_jni is None:   # look the Java objects up once, not on every check
+            try:
+                from jnius import autoclass  # type: ignore
+                from android import mActivity  # type: ignore
+                self._kb_jni = (mActivity.getWindow().getDecorView(), autoclass("android.graphics.Rect")())
+            except Exception:
+                self._kb_jni = False   # desktop
+        if not self._kb_jni:
             return 0
-        r = autoclass("android.graphics.Rect")()
-        mActivity.getWindow().getDecorView().getWindowVisibleDisplayFrame(r)
+        view, r = self._kb_jni
+        view.getWindowVisibleDisplayFrame(r)
         self._kb_base = max(self._kb_base, r.bottom)
         kb = self._kb_base - r.bottom
         return kb if kb > dp(80) else 0  # ignore small jitters (nav bar changes)
 
     def track_keyboard(self, *_):
+        if not (self.entry.focus or self._kb_now or Clock.get_time() < self._kb_watch_until):
+            return   # keyboard closed and typing box not in use: nothing to check
         try:
             kb = self.keyboard_px()
         except Exception:
@@ -274,29 +285,54 @@ class AssistantApp(App):
             self.ask_permissions(res.permissions)
         else:
             self.say(res.text, "sys" if res.kind in ("unsupported", "error") else "bot")
-        if getattr(res, "extra", None) == "auto_send_setup":
-            self.button_list([("Turn on auto-send", self.auto_send_setup)])
+        if getattr(res, "extra", None) in ("auto_send_setup", "auto_send_settings"):
+            self.auto_send_buttons(res.extra)
         elif getattr(res, "extra", None) == "battery_exemption":
             Clock.schedule_once(lambda *_: self.asst.daily.request_battery_exemption(), 1.5)
 
-    def button_list(self, entries):
-        """Inline buttons in the chat. Each list is single-use: one tap disables all of them."""
+    def auto_send_buttons(self, extra):
+        """The auto-send switch as a clear, filled button (a plain chat chip looked like text on the
+        phone: 'use the button below' with no button visible). These buttons only open Settings, so
+        they stay usable: tap them as often as needed (single-use, greyed buttons looked broken)."""
+        if extra == "auto_send_setup":
+            self.button_list([("Turn on auto-send", self.auto_send_setup)], accent=True, icon="send", keep=True)
+        elif extra == "auto_send_settings":
+            self.button_list([("Auto-send settings", self.auto_send_open_settings)],
+                             accent=True, icon="sliders", keep=True)
+
+    def auto_send_open_settings(self):
+        self.say("Opening Settings at '%s auto-send' (under 'Downloaded services'): tap it to switch "
+                 "it off or on." % APP_NAME, "sys", save=False)
+        if not self.asst.messages.open_accessibility_settings():
+            self.say("Could not open Settings. Open Settings > Accessibility > %s auto-send yourself."
+                     % APP_NAME, "sys", save=False)
+
+    def button_list(self, entries, accent=False, icon=None, keep=False):
+        """Inline buttons in the chat. A normal list is single-use: one tap disables all of them.
+        keep=True: buttons that only open a screen (Settings); they stay usable and do not grey out
+        other lists."""
         box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
         box.bind(minimum_height=box.setter("height"))
-        # A new list makes older lists stale (assistant only accepts the latest ids),
-        # so grey them out instead of letting a tap fail later.
-        for old in getattr(self, "_live_buttons", []):
-            old.disabled = True
         btns = []
-        self._live_buttons = btns
+        if not keep:
+            # A new list makes older lists stale (assistant only accepts the latest ids),
+            # so grey them out instead of letting a tap fail later.
+            for old in getattr(self, "_live_buttons", []):
+                old.disabled = True
+            self._live_buttons = btns
 
         def make(label, fn):
-            b = ThemedButton(text=label, mode="text", wide=True, halign="left", fixed_stack="side",
-                             size_hint_x=1, height=dp(44))
+            if accent:
+                b = ThemedButton(text=label, icon=icon or "check", mode="icon_text", kind="accent",
+                                 fixed_stack="side", size_hint_x=1, height=dp(50))
+            else:
+                b = ThemedButton(text=label, mode="text", wide=True, halign="left", fixed_stack="side",
+                                 size_hint_x=1, height=dp(44))
 
             def on(*_):
-                for x in btns:
-                    x.disabled = True
+                if not keep:
+                    for x in btns:
+                        x.disabled = True
                 fn()
             b.bind(on_release=on)
             return b
@@ -359,10 +395,6 @@ class AssistantApp(App):
             if getattr(res, "extra", None) == "battery_exemption":
                 # let the user read the message first, then show Android's own dialog
                 Clock.schedule_once(lambda *_: self.asst.daily.request_battery_exemption(), 1.5)
-
-    # ---------- header / input buttons that are not chat features ----------
-    def show_style(self):
-        self.style_editor.open()
 
     # ---------- voice (engine: pa/voice.py + pa/adapters/voice_android.py) ----------
     def voice_path(self):
@@ -533,17 +565,28 @@ class AssistantApp(App):
             if getattr(self.asst.messages, "auto_send_ready", lambda: False)() and not self.vset.auto_send_wanted:
                 Clock.schedule_once(lambda *_: self.check_auto_send(), 0.5)
 
-    def check_auto_send(self):
+    def check_auto_send(self, looks=0):
         """Remember that WhatsApp auto-send was on; if an app update switched it off, say so."""
         if self.asst is None:
             return
         ready = getattr(self.asst.messages, "auto_send_ready", lambda: False)()
+        if not ready and self.vset.auto_send_wanted and looks < 8:
+            # The service can be off for several seconds while it is still coming back: after an
+            # update it was bound only after >5 s, and after the Accessibility settings screen it came
+            # back ~10 s later (measured on the phone). Look again for ~16 s before warning.
+            Clock.schedule_once(lambda *_: self.check_auto_send(looks + 1), 2)
+            return
         if ready and not self.vset.auto_send_wanted:
             self.vset.auto_send_wanted = True
         elif not ready and self.vset.auto_send_wanted:
-            self.say("WhatsApp auto-send is off (Android turns it off after an app update), so WhatsApp "
-                     "messages will wait for you to press Send. Turn it on again:", "sys")
-            self.button_list([("Turn on auto-send", self.auto_send_setup)])
+            if getattr(self, "_auto_send_warned", False):
+                return  # once per app session, and not stored in the chat history
+            self._auto_send_warned = True
+            self.say("WhatsApp auto-send is off (Android switches it off when the app is updated or "
+                     "force-stopped), so WhatsApp messages will wait for you to press Send. Turn it on again:",
+                     "sys", save=False)
+            self.auto_send_buttons("auto_send_setup")
+            return
         else:
             return
         try:
@@ -551,13 +594,21 @@ class AssistantApp(App):
         except OSError:
             pass
 
+    def show_auto_send(self):
+        """Menu > WhatsApp auto-send: always there, shows ON/OFF and the switch."""
+        if not self.asst:
+            return
+        res = self.asst.auto_send_status()
+        self.say(res.text, "bot", save=False)
+        self.auto_send_buttons(res.extra)
+
     def auto_send_setup(self):
-        self.say("To let me press Send in WhatsApp: in the screen that opens, tap '%s auto-send' (it may be "
-                 "under 'Installed apps' or 'Downloaded apps') and switch it on.\nIf it is greyed out "
+        self.say("To let me press Send in WhatsApp: in the screen that opens, tap '%s auto-send' (under "
+                 "'Downloaded services') and switch it on.\nIf it is greyed out "
                  "('Restricted setting'): open Settings > Apps > %s, tap the 3 dots at the top right, choose "
                  "'Allow restricted settings', then try again.\nIt only acts for 20 seconds after I open a chat, "
-                 "and only on the exact message I typed." % (APP_NAME, APP_NAME), "sys")
-        Clock.schedule_once(lambda *_: self.asst.messages.open_accessibility_settings(), 2.5)
+                 "and only on the exact message I typed." % (APP_NAME, APP_NAME), "sys", save=False)
+        Clock.schedule_once(lambda *_: self.asst.messages.open_accessibility_settings(), 2.0)
 
     def on_stop(self):
         self.voice.release()

@@ -24,13 +24,14 @@ GLYPHS = {
     "camera": "",     # photo_camera
     "note": "",       # sticky_note_2
     "user": "",       # person
-    "palette": "",    # palette
     "bookmark": "",   # bookmark
     "dots": "",       # more_horiz
     "menu": "",       # menu
     "calendar": "",   # calendar_month
     "wave": "",       # graphic_eq
     "edit": "",       # edit
+    "sun": "",       # light_mode
+    "moon": "",      # dark_mode
     "none": "",
     # state and navigation icons
     "stop": "",       # stop

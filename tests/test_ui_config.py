@@ -18,30 +18,30 @@ def ids(cfg, region):
 
 
 class ThemeTests(unittest.TestCase):
-    def test_every_theme_defines_every_role_with_valid_hex(self):
-        for tid, (_, cols) in themes.BUILTIN.items():
-            self.assertEqual(set(cols), set(themes.ROLES), tid)
+    def test_only_light_and_dark_exist_with_every_role(self):
+        self.assertEqual(set(themes.COLORS), {"light", "dark"})     # no theme picker any more
+        for mode, cols in themes.COLORS.items():
+            self.assertEqual(set(cols), set(themes.ROLES), mode)
             for v in cols.values():
-                self.assertTrue(themes.valid_hex(v), (tid, v))
+                self.assertTrue(themes.valid_hex(v), (mode, v))
 
-    def test_every_theme_is_readable(self):
-        for tid in themes.BUILTIN:
-            self.assertEqual(themes.readability_problems(themes.resolve(tid)), [], tid)
+    def test_light_and_dark_are_readable(self):
+        for mode in themes.MODES:
+            self.assertEqual(themes.readability_problems(themes.resolve(mode)), [], mode)
 
-    def test_there_are_several_themes_including_a_light_and_a_high_contrast_one(self):
-        self.assertGreaterEqual(len(themes.BUILTIN), 6)
-        for tid in ("violet", "daylight", "contrast"):
-            self.assertIn(tid, themes.BUILTIN)
+    def test_dark_is_plain_black_not_purple(self):
+        c = themes.resolve("dark")
+        self.assertEqual(c["bg"], "#000000")
+        for role in ("bg", "bg2", "panel", "surface", "button", "accent", "input_bg"):
+            r, g, b, _ = themes.hex_to_rgba(c[role])
+            self.assertLess(max(r, g, b) - min(r, g, b), 0.05, role)   # grey/black: no colour cast
+        self.assertGreater(themes.luminance(themes.resolve("light")["bg"]), 0.8)
 
-    def test_note_colour_follows_the_theme_and_reads_on_the_note_pill(self):
-        notes = set()
-        for tid in themes.BUILTIN:
-            c = themes.resolve(tid)
+    def test_note_colour_reads_on_the_note_pill(self):
+        for mode in themes.MODES:
+            c = themes.resolve(mode)
             pill = themes.mix(c["surface"], c["sys"], 0.14)   # how a note is drawn: surface leaning to its colour
-            self.assertGreaterEqual(themes.contrast_ratio(c["sys"], pill), 4.5, tid)
-            notes.add(c["sys"])
-        self.assertGreaterEqual(len(notes), 7)   # not one fixed yellow for everybody
-        self.assertNotIn("#fcd34d", notes)
+            self.assertGreaterEqual(themes.contrast_ratio(c["sys"], pill), 4.5, mode)
 
     def test_contrast_ratio_extremes(self):
         self.assertAlmostEqual(themes.contrast_ratio("#000000", "#ffffff"), 21.0, places=1)
@@ -59,10 +59,11 @@ class ThemeTests(unittest.TestCase):
         self.assertEqual(themes.best_on("#ffff00"), "#000000")
         self.assertEqual(themes.best_on("#101010"), "#ffffff")
 
-    def test_unknown_theme_falls_back_to_default_and_copies_are_independent(self):
-        self.assertEqual(themes.resolve("nope"), themes.resolve(themes.DEFAULT_THEME))
-        themes.resolve("violet")["bg"] = "#ffffff"   # editing a returned dict must not change the theme
-        self.assertNotEqual(themes.resolve("violet")["bg"], "#ffffff")
+    def test_unknown_mode_falls_back_to_dark_and_copies_are_independent(self):
+        self.assertEqual(themes.resolve("nope"), themes.resolve("dark"))
+        self.assertEqual(themes.DEFAULT_MODE, "dark")
+        themes.resolve("dark")["bg"] = "#ffffff"   # editing a returned dict must not change the colours
+        self.assertEqual(themes.resolve("dark")["bg"], "#000000")
 
 
 class IconTests(unittest.TestCase):
@@ -99,48 +100,55 @@ class IconTests(unittest.TestCase):
 class ConfigTests(unittest.TestCase):
     def test_default_layout_matches_the_design(self):
         cfg = C.default_config()
-        self.assertEqual(ids(cfg, "menu"), ["theme", "calendar", "tasks", "prefs", "voice"])
+        self.assertEqual(ids(cfg, "menu"), ["calendar", "tasks", "prefs", "autosend", "voice"])
         self.assertEqual(ids(cfg, "input_left"), ["plus"])
         self.assertEqual(ids(cfg, "input_right"), ["mic", "send"])
         self.assertEqual(C.normalize(cfg), cfg)  # already valid, normalize is a no-op
 
-    def test_menu_has_theme_and_calendar(self):
-        menu = ids(C.default_config(), "menu")
-        self.assertIn("theme", menu)
-        self.assertIn("calendar", menu)
+    def test_theme_section_is_gone(self):
+        self.assertNotIn("theme", C.BUTTONS)
+        self.assertNotIn("theme", ids(C.default_config(), "menu"))
+        self.assertNotIn("theme", C.default_config())
+        self.assertFalse(hasattr(C, "set_theme"))
+        self.assertIn("calendar", ids(C.default_config(), "menu"))
 
     def test_app_is_called_lazey(self):
         self.assertEqual(C.APP_NAME, "Lazey")
         self.assertNotIn("pacsit", repr(C.default_config()).lower())
 
     def test_normalize_survives_garbage(self):
-        for raw in (None, 5, "x", [], {"theme": 9}, {"theme": []}, {"theme": {}}, {"layout": 3, "buttons": "x"}):
+        for raw in (None, 5, "x", [], {"theme": 9}, {"theme": []}, {"theme": {}}, {"layout": 3, "buttons": "x"},
+                    {"mode": 3}, {"mode": "purple"}):
             self.assertEqual(C.normalize(raw), C.default_config())
 
-    def test_set_theme_changes_only_the_theme(self):
-        cfg = C.set_theme(C.default_config(), "ocean")
-        self.assertEqual(cfg["theme"], "ocean")
-        self.assertEqual(cfg["layout"], C.default_config()["layout"])
-        self.assertEqual(cfg["buttons"], C.default_config()["buttons"])
-        self.assertEqual(C.set_theme(cfg, "not-a-theme")["theme"], themes.DEFAULT_THEME)
-
     def test_layout_and_buttons_cannot_be_changed_from_a_file(self):
-        cfg = C.normalize({"theme": "rose", "layout": {"show_tagline": False, "menu_side": "right"},
+        cfg = C.normalize({"theme": "rose", "mode": "light", "layout": {"show_tagline": False, "menu_side": "right"},
                            "buttons": [{"id": "mic", "region": "menu", "icon": "heart", "label": "Talk"}],
                            "background": "wine", "custom": {"accent": "#ff0000"}, "saved_themes": {"x": {}}})
-        self.assertEqual(cfg["theme"], "rose")
-        self.assertEqual(cfg, C.set_theme(C.default_config(), "rose"))
+        self.assertEqual(cfg, C.set_mode(C.default_config(), "light"))
         self.assertNotIn("custom", cfg)
 
-    def test_store_saves_only_the_theme_and_roundtrips(self):
+    def test_sun_moon_mode_switch(self):
+        cfg = C.default_config()
+        self.assertEqual(cfg["mode"], "dark")                       # the app starts dark
+        light = C.set_mode(cfg, "light")
+        self.assertEqual(light["mode"], "light")
+        self.assertGreater(themes.luminance(C.current_colors(light)["bg"]), 0.8)
+        self.assertEqual(C.current_colors(cfg)["bg"], "#000000")    # dark = black
+        self.assertEqual(C.set_mode(light, "dark")["mode"], "dark")
+        self.assertEqual(C.set_mode(cfg, "purple")["mode"], "dark")  # garbage -> dark
+        for name in ("sun", "moon"):
+            self.assertTrue(iconset.glyph(name), name)
+
+    def test_store_saves_only_the_mode_and_roundtrips(self):
         with tempfile.TemporaryDirectory() as d:
             store = C.ConfigStore(d)
             self.assertEqual(store.load(), C.default_config())  # no file yet
-            cfg = C.set_theme(C.default_config(), "sunset" if "sunset" in themes.BUILTIN else "emerald")
+            cfg = C.set_mode(C.default_config(), "light")
             store.save(cfg)
-            self.assertEqual(store.load(), cfg)
+            self.assertEqual(store.load(), cfg)                 # the sun/moon choice survives a restart
             with open(store.path, encoding="utf-8") as fh:
-                self.assertEqual(sorted(json.load(fh)), ["theme", "version"])
+                self.assertEqual(sorted(json.load(fh)), ["mode", "version"])
             self.assertFalse(os.path.exists(store.path + ".tmp"))
 
     def test_store_handles_corrupt_and_old_files(self):
@@ -153,10 +161,13 @@ class ConfigTests(unittest.TestCase):
             with open(store.path, "w") as fh:  # a file from an earlier version with all the old options
                 json.dump({"theme": "forest", "background": "teal", "custom": {"bg": "#111111"},
                            "layout": {"btn_h": 60}, "buttons": [{"id": "send", "region": "menu"}]}, fh)
-            self.assertEqual(store.load(), C.default_config())  # "forest" no longer exists -> default theme
-            with open(store.path, "w") as fh:
-                json.dump({"theme": "ocean", "background": "teal", "layout": {"btn_h": 60}}, fh)
-            self.assertEqual(store.load(), C.set_theme(C.default_config(), "ocean"))
+            self.assertEqual(store.load(), C.default_config())  # old dark themes -> dark
+            with open(store.path, "w") as fh:     # an old file with the light theme -> light mode
+                json.dump({"version": 3, "theme": "daylight"}, fh)
+            self.assertEqual(store.load()["mode"], "light")
+            with open(store.path, "w") as fh:     # a saved mode wins over an old theme
+                json.dump({"version": 3, "theme": "daylight", "mode": "dark"}, fh)
+            self.assertEqual(store.load()["mode"], "dark")
 
 
 class PromptTests(unittest.TestCase):

@@ -1,5 +1,5 @@
-"""Lazey's customisable GUI: themes, vector icons, movable buttons.
+"""Lazey's GUI: light/dark colours (sun/moon button), vector icons, fixed layout.
 
 config / themes / iconset are pure Python (unit-tested without a window).
-widgets / chrome / editor need Kivy.
+widgets / chrome need Kivy.
 """

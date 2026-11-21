@@ -11,7 +11,7 @@ ALLOWED = {"remember_preference", "add_note", "query_notes", "schedule_work",
            "set_alarm", "set_timer", "show_alarms",
            "device_info", "add_todo", "list_todos", "done_todo", "plan_day",
            "create_routine", "run_routine", "list_routines", "delete_routine",
-           "schedule_routine", "unschedule_routine",
+           "schedule_routine", "unschedule_routine", "auto_send",
            "change_setting", "unknown"}
 UNSUPPORTED = {"change_setting"}
 PHOTO_RANGES = {"today", "yesterday", "week", "month"}
@@ -24,7 +24,7 @@ FIELDS = {
     "add_note": {"text"},
     "query_notes": {"query"},
     "schedule_work": {"title", "date", "time", "window", "duration_minutes"},
-    "call_contact": {"name", "number", "prefix", "sim"},
+    "call_contact": {"name", "number", "prefix", "sim", "via", "video"},
     "find_photos": {"range", "keyword"},
     "open_app": {"app"},
     "schedule_message": {"name", "number", "prefix", "text", "time", "channel", "repeat", "days"},
@@ -300,6 +300,8 @@ def _parse_send(t):
     None unless both the text and the person are found (then other intents get a chance)."""
     if not re.search(r"\b(send|bhejo|bhej|message|msg|sms|text|whats\s?app)\b", t, re.I):
         return None
+    if re.search(r"\b(call|dial)\b", t, re.I) and not re.search(r"\b(send|bhejo|bhej|message|msg|sms|text)\b", t, re.I):
+        return None  # "neha ko whatsapp pe call karo" is a WhatsApp CALL, not a message saying "call"
     ent = {}
     s = _msg_quote_channel(t, ent)
     if re.match(r"^\s*(?:what'?s\s?app|wh?ats?app|whatsap|sms)\b", t, re.I) and not re.match(
@@ -497,6 +499,9 @@ class ConstrainedParser(InferenceBackend):
         m = re.match(r"^note\s*(?:karo|kar do|kardo|this)?\s*[:\-]\s*(.+)$", low, re.S)
         if m:
             return {"intent": "add_note", "entities": {"text": t[m.start(1):]}}
+        # "auto send on karo", "turn on auto-send", "autosend chalu", "is auto send on?"
+        if re.search(r"\bauto[\s\-]?send\b", low):
+            return {"intent": "auto_send", "entities": {}}
         for found in (everyday.parse_routine(t, _daily_time, weekday_days), everyday.parse_briefing(low),
                       everyday.parse_info(low),
                       everyday.parse_todo(t, today, _daily_time)):
@@ -542,7 +547,19 @@ class ConstrainedParser(InferenceBackend):
         if app:
             return {"intent": "open_app", "entities": {"app": app}}
         if re.search(r"\b(call|dial|phone|fone)\b", low) and not re.search(r"\b(%s)\b" % PHOTO_WORDS, low):
-            return {"intent": "call_contact", "entities": _parse_call(t, low)}
+            # "call neha on whatsapp", "neha ko whatsapp pe call karo", "whatsapp video call neha"
+            wa = re.search(r"\b(what'?s\s?app|wh?ats?app|whatsap)\b", low)
+            video = bool(re.search(r"\bvideo\b", low))
+            if wa or video:
+                low = re.sub(r"\b(?:on|via|par|pe|se|through|from)?\s*(?:what'?s\s?app|wh?ats?app|whatsap)\b"
+                             r"(?:\s+(?:pe|par|se|on))?|\b(?:video|voice)\b", " ", low)
+            ent = _parse_call(t, low)
+            if wa or video:  # a video call is always a WhatsApp call here
+                ent["via"] = "whatsapp"
+                ent.pop("sim", None)
+                if video:
+                    ent["video"] = True
+            return {"intent": "call_contact", "entities": ent}
         if re.search(r"\b(%s)\b" % PHOTO_WORDS, low):
             ent = {}
             if re.search(r"\b(aaj|today)\b", low):
@@ -661,6 +678,11 @@ def validate(raw, today: date) -> Intent:
                 v = re.sub(r"[^\w .'-]", "", _clean(v, 40)).strip()
             elif k == "name_text":
                 v = _clean(v, 300)
+            elif k == "via":
+                if v != "whatsapp":
+                    continue
+            elif k == "video":
+                v = bool(v)
             elif k == "channel":
                 if v not in ("sms", "whatsapp"):
                     continue

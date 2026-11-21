@@ -7,6 +7,7 @@ SMS: sent by the phone with SmsManager (SEND_SMS), from the chosen SIM. Goes thr
 approval card first (an SMS cannot be taken back).
 """
 import re
+import time
 
 from . import android_util as au
 from .base import Adapter, Result
@@ -60,9 +61,13 @@ class AndroidMessagesAdapter(Adapter):
 
     # ---- WhatsApp auto-send (Accessibility service, user switches it on) ----
     def auto_send_ready(self):
+        # Android switches this service OFF when the app is updated or force-stopped, so an
+        # "auto-send is off" reminder after an update can be real. AutoSend.enabled first asks the
+        # running service itself (the stored setting read back '' in-app after Settings was opened).
         try:
             return bool(self._auto is not None and self._auto.enabled(au.mActivity))
-        except Exception:
+        except Exception as ex:
+            print("auto_send_ready failed: %s: %s" % (type(ex).__name__, ex), flush=True)
             return False
 
     def arm_auto_send(self, text):
@@ -77,11 +82,34 @@ class AndroidMessagesAdapter(Adapter):
         except Exception:
             return None
 
+    settings_opened_at = 0.0  # time.time() when the Accessibility settings screen was last opened
+
     def open_accessibility_settings(self):
+        # On the test phone (vivo, Android 16) opening that screen switched the service OFF while it
+        # was shown, and Android switched it back ON about 10 s after leaving it (measured with adb).
+        self.settings_opened_at = time.time()
         try:
             Intent = au.autoclass("android.content.Intent")
+            me = au.mActivity.getPackageName() + "/org.pa.assistant.AutoSendService"
+            # 1) the service's own page with its switch (Android may refuse it to normal apps)
+            try:
+                it = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
+                it.putExtra("android.intent.extra.COMPONENT_NAME", me)
+                it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                au.mActivity.startActivity(it)
+                return True
+            except Exception:
+                pass
+            # 2) the Accessibility list, scrolled to and highlighting "Lazey auto-send" where the
+            #    Settings app supports it (the plain list hid it far down under "Downloaded apps")
             it = Intent("android.settings.ACCESSIBILITY_SETTINGS")
-            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            it.putExtra(":settings:fragment_args_key", me)
+            Bundle = au.autoclass("android.os.Bundle")
+            b = Bundle()
+            b.putString(":settings:fragment_args_key", me)
+            it.putExtra(":settings:show_fragment_args", b)
+            # a fresh Settings task: an old one brought back to the front ignored the highlight
+            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK)
             au.mActivity.startActivity(it)
             return True
         except Exception:
@@ -124,6 +152,44 @@ class AndroidMessagesAdapter(Adapter):
             return Result("done", "sms handed to the phone")
         except Exception as ex:
             return Result("failed", "could not send SMS: %s" % type(ex).__name__)
+
+    # ---- WhatsApp calls ----
+    # WhatsApp adds "Voice call" / "Video call" rows to each synced contact in the phone's
+    # contacts (ContactsContract.Data, these mimetypes, DATA1 = "<number>@s.whatsapp.net").
+    # Opening such a row with ACTION_VIEW in WhatsApp starts the call: a normal intent, no screen
+    # automation. Needs READ_CONTACTS.
+    WA_VOICE = "vnd.android.cursor.item/vnd.com.whatsapp.voip.call"
+    WA_VIDEO = "vnd.android.cursor.item/vnd.com.whatsapp.video.call"
+
+    def whatsapp_call(self, number, video=False):
+        """'done' = WhatsApp call started; 'failed' with detail 'not_on_whatsapp' when the number
+        has no WhatsApp call entry (not on WhatsApp, or WhatsApp has not synced it yet)."""
+        if not au.ANDROID:
+            return Result("unsupported", "not running on Android")
+        mime = self.WA_VIDEO if video else self.WA_VOICE
+        try:
+            Data = au.autoclass("android.provider.ContactsContract$Data")
+            cur = au.mActivity.getContentResolver().query(Data.CONTENT_URI, ["_id", "data1"], "mimetype=?",
+                                                          [mime], None)
+            want = wa_number(number)
+            row = None
+            for rid, d1 in au.rows(cur, 2):
+                digits = re.sub(r"\D", "", (d1 or "").split("@")[0])
+                if digits and want and (digits == want or digits[-10:] == want[-10:]):
+                    row = rid
+                    break
+            if row is None:
+                return Result("failed", "not_on_whatsapp")
+            Intent = au.autoclass("android.content.Intent")
+            Uri = au.autoclass("android.net.Uri")
+            it = Intent(Intent.ACTION_VIEW)
+            it.setDataAndType(Uri.parse("content://com.android.contacts/data/%s" % row), mime)
+            it.setPackage("com.whatsapp")
+            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            au.mActivity.startActivity(it)
+            return Result("done", "whatsapp call started")
+        except Exception as ex:
+            return Result("failed", "could not start the WhatsApp call: %s" % type(ex).__name__)
 
     def open_whatsapp(self, number, text):
         if not au.ANDROID:

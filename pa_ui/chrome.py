@@ -3,7 +3,7 @@
 The app owns the content widgets (chat scroller, proposal card, text box); Chrome owns everything
 around them (header, hero, typing bar, menu) and re-arranges them whenever the configuration changes.
 
-    [ menu ]        wave-logo Lazey        [ avatar ]
+    [ menu ]        wave-logo Lazey        [ sun / moon ]   (light / dark mode)
                    (Your Personal AI Assistant)
     ----------------------------------------------------
     hero (orb + "Hey") while the chat is empty, else the chat
@@ -28,7 +28,7 @@ def _unparent(w):
 
 class Chrome:
     def __init__(self, app, cfg, store=None):
-        """app must provide the handler methods named in config.BUTTONS (show_style, send, ...)."""
+        """app must provide the handler methods named in config.BUTTONS (show_tasks, send, ...)."""
         self.app, self.cfg, self.store = app, cfg, store
         self.buttons = {}
         self.input_enabled = True
@@ -120,9 +120,17 @@ class Chrome:
             self._mic_look()
         return btn
 
+    def toggle_mode(self):
+        """Sun/moon button: switch between light and dark mode (saved)."""
+        self.apply(config.set_mode(self.cfg, "dark" if self.cfg.get("mode") == "light" else "light"))
+
     def _header(self, lay):
         menu = RoundIcon(diameter=44, icon="menu", kind="flat")
         menu.bind(on_release=lambda *_: self.open_menu())
+        # top corner opposite the menu: sun = light mode is on, moon = dark mode is on (tap to switch)
+        mode_btn = RoundIcon(diameter=44, icon="sun" if self.cfg.get("mode") == "light" else "moon", kind="flat")
+        mode_btn.bind(on_release=lambda *_: Clock.schedule_once(lambda *_: self.toggle_mode(), 0))
+        self.buttons["mode"] = mode_btn
         brand = Brand(align=lay["brand_align"], tagline=lay["show_tagline"])
         header = BoxLayout(size_hint_y=None, height=dp(76 if lay["show_tagline"] else 52))
 
@@ -134,8 +142,8 @@ class Chrome:
             box.add_widget(col)
             w.pos_hint = {}
             return box
-        spacer = Widget()  # same width as the menu button, so the title stays truly centred
-        left, right = (menu, spacer) if lay["menu_side"] == "left" else (spacer, menu)
+        # (same width as the menu button, so the title stays truly centred)
+        left, right = (menu, mode_btn) if lay["menu_side"] == "left" else (mode_btn, menu)
         for w in (side(left), brand, side(right)):  # the brand centres itself or hugs the left (see Brand)
             header.add_widget(w)
         return header

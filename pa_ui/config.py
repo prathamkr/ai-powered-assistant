@@ -1,7 +1,7 @@
-"""Lazey's saved GUI setting: which theme is selected.
+"""Lazey's saved GUI setting: light or dark mode (the sun/moon button).
 
 Pure Python. The screen layout and the placement of the buttons are fixed by this module
-(DEFAULT_LAYOUT / DEFAULT_BUTTONS); only the theme is stored on the phone, and whatever is read back
+(DEFAULT_LAYOUT / DEFAULT_BUTTONS); only the mode is stored on the phone, and whatever is read back
 from disk is validated, so a damaged or hand-edited file can never break the screen.
 
 Where a button lives:
@@ -19,10 +19,10 @@ TAGLINE = "Your Personal AI Assistant"
 
 # id -> (label, icon, handler name on the app)
 BUTTONS = {
-    "theme": ("Theme", "palette", "show_style"),
     "calendar": ("Calendar", "calendar", "show_calendar"),
     "tasks": ("Tasks", "list", "show_tasks"),  # to-dos, reminders, routines, daily messages
     "prefs": ("Preferences", "sliders", "show_prefs"),
+    "autosend": ("WhatsApp auto-send", "send", "show_auto_send"),  # shows ON/OFF + the switch
     "voice": ("Voice", "speaker", "on_voice"),
     "plus": ("Quick prompts", "plus", "show_quick"),
     "mic": ("Mic", "mic", "on_mic"),
@@ -33,29 +33,37 @@ DEFAULT_LAYOUT = dict(brand_align="center", menu_side="left", input_position="bo
                       show_tagline=True, bubbles="bubbles", btn_h=56, radius=22, font_scale=1.0, spacing=8)
 
 DEFAULT_BUTTONS = [  # (id, region) in display order
-    ("theme", "menu"), ("calendar", "menu"), ("tasks", "menu"), ("prefs", "menu"), ("voice", "menu"),
+    ("calendar", "menu"), ("tasks", "menu"), ("prefs", "menu"), ("autosend", "menu"), ("voice", "menu"),
     ("plus", "input_left"), ("mic", "input_right"), ("send", "input_right")]
+
+# files saved before the theme picker was removed: their light theme becomes light mode
+_LIGHT_THEMES = {"daylight"}
 
 
 def default_config():
-    return {"version": 3, "theme": themes.DEFAULT_THEME, "layout": dict(DEFAULT_LAYOUT),
+    return {"version": 4, "mode": themes.DEFAULT_MODE, "layout": dict(DEFAULT_LAYOUT),
             "buttons": [{"id": bid, "region": region, "icon": BUTTONS[bid][1], "label": BUTTONS[bid][0]}
                         for bid, region in DEFAULT_BUTTONS]}
 
 
 def normalize(raw):
-    """A valid config from whatever `raw` contains. Only the theme is taken from `raw`; layout and
-    buttons are always the fixed defaults (older files may carry layout/colour edits; they are ignored)."""
+    """A valid config from whatever `raw` contains. Only the light/dark mode is taken from `raw`;
+    layout and buttons are always the fixed defaults (older files may carry theme/layout/colour edits;
+    a saved light theme without a mode becomes light mode, everything else is ignored)."""
     cfg = default_config()
-    theme = raw.get("theme") if isinstance(raw, dict) else None
-    if isinstance(theme, str) and theme in themes.BUILTIN:
-        cfg["theme"] = theme
+    raw = raw if isinstance(raw, dict) else {}
+    mode = raw.get("mode")
+    if isinstance(mode, str) and mode in themes.MODES:
+        cfg["mode"] = mode
+    elif isinstance(raw.get("theme"), str) and raw["theme"] in _LIGHT_THEMES:
+        cfg["mode"] = "light"
     return cfg
 
 
-def set_theme(cfg, theme_id):
+def set_mode(cfg, mode):
+    """Light or dark mode (the sun/moon button in the header)."""
     new = dict(cfg)
-    new["theme"] = theme_id
+    new["mode"] = mode
     return normalize(new)
 
 
@@ -64,13 +72,13 @@ def buttons_in(cfg, region):
 
 
 def current_colors(cfg):
-    return themes.resolve(cfg["theme"])
+    return themes.resolve(cfg.get("mode"))
 
 
 # ---------- storage ----------
 class ConfigStore:
-    """JSON file in the app's private data dir holding just the theme. Writes are atomic; a corrupt
-    file is kept as .bad and the default theme is used."""
+    """JSON file in the app's private data dir holding just the mode. Writes are atomic; a corrupt
+    file is kept as .bad and the default (dark) is used."""
 
     def __init__(self, directory, name="ui_config.json"):
         self.path = os.path.join(directory, name)
@@ -92,5 +100,5 @@ class ConfigStore:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"version": cfg.get("version", 3), "theme": cfg["theme"]}, fh, indent=1)
+            json.dump({"version": cfg.get("version", 4), "mode": cfg.get("mode", themes.DEFAULT_MODE)}, fh, indent=1)
         os.replace(tmp, self.path)

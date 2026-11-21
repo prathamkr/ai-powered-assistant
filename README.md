@@ -88,6 +88,22 @@ user can change/delete it in Clock): `set an alarm of 5 am`, `subah 5 baje ka al
 "set an alarm of 5 am" -> next alarm "Sun 5:00 AM" in the system.
 Chat history: every chat line is stored encrypted (kind `chat`), the last 100 come back when the
 app opens, the newest 500 are kept; "Clear chat history" in Prefs, also wiped by Delete ALL.
+WhatsApp calls: `call neha on whatsapp`, `neha ko whatsapp pe call karo`, `whatsapp video call neha`.
+Same rules as phone calls (direct when exactly one contact matches, a list when several, asks first
+for "usko"). Started through WhatsApp's own "Voice call"/"Video call" contact entry (ContactsContract
+Data rows `vnd.com.whatsapp.voip.call` / `.video.call`) with a normal intent, no screen automation.
+If the number has no such entry, the chat opens and the user taps the call button. Verified on the
+phone with a contact that does not exist and a number that is not on WhatsApp (no call was made);
+a real WhatsApp call was not placed during testing.
+Auto-send note: Android switches the auto-send accessibility service OFF whenever the app is updated
+or force-stopped (seen on the phone: setting read back as null). The app then shows one reminder
+with a "Turn on auto-send" button per session (not stored in the chat history). The switch is
+always reachable: **Menu > WhatsApp auto-send** shows ON/OFF, with "Turn on auto-send" when it is off
+(or a button to open the settings to switch it off when it is on). Saying `auto send on karo` /
+`turn on auto-send` / `is auto send on?` gives the same answer and button.
+On the test phone (vivo, Android 16) opening the Accessibility settings screen switches the service
+OFF while that screen is shown; Android switches it back ON about 10 s after leaving it (measured
+with adb). Right after that screen, the app keeps checking for up to 15 s before it answers "off".
 Message now: `send neha a message hi`, `open whatsapp and send neha a message hi`,
 `send neha a message from airtel hi`, `neha ko hi message karo`, `rahul ko sms karo ki main aa raha hun`.
 WhatsApp opens the chat with the text typed (user presses Send). **Auto-send** (user's choice,
@@ -150,15 +166,18 @@ chat did not auto-scroll after long lists; stale photo lists stayed tappable.
     docs/FEASIBILITY.md
 
 ## Look: Lazey UI (from the team's `gui-themes-layout` branch)
-The UI in `pa_ui/` (themes, header with wave logo and tagline, greeting orb, chat bubbles, rounded
-typing bar with `+` quick prompts / mic / send, slide-out menu, Theme screen with 8 themes,
+The UI in `pa_ui/` (header with wave logo and tagline, greeting orb, chat bubbles, rounded
+typing bar with `+` quick prompts / mic / send, slide-out menu,
 Calendar month view, quick prompts you can add/delete, Poppins/Inter fonts and Material Icons
 Round) was written on that branch on top of v0.3 and integrated by hand into `main.py`, keeping
 every feature added on main after v0.3. Integration choices:
 - **Package id unchanged** (`org.pa.localassistant`); only the visible name is "Lazey". The branch had
   renamed the package to `org.pa.lazey`, which would install a second, empty app without the
   encrypted data, permissions, battery exemption and auto-send switch.
-- Menu: Theme, Calendar, **Tasks** (added: to-dos & reminders with Done/Del, routines with Run/Del and
+- Look: no theme picker (the branch's Theme screen with 8 themes was removed). A **sun/moon button**
+  in the top-right corner switches light mode (sun) and dark mode (moon, plain black); the choice is
+  saved.
+- Menu: Calendar, **Tasks** (added: to-dos & reminders with Done/Del, routines with Run/Del and
   their times, daily messages, "allow background" button), Preferences (plus "Clear chat history"),
   Voice (the branch's simpler screen plus "Offline only / Allow online" and the offline speech pack
   status/download, needed for the no-internet requirement).

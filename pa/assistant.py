@@ -1,6 +1,7 @@
 """Orchestrator: text -> intent -> (memory | plan -> proposal -> approval -> adapter)."""
 import re
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -281,12 +282,16 @@ class Assistant:
                 and PRONOUN_RE.search(text)):
             name, number = self._last_contact
             if n == "call_contact":
-                self._choices = {"kind": "call", "items": [{"name": name, "number": number}], "sim": None}
-                return Response("choose", "Call %s (%s) again? Say 1 or yes." % (name, number),
-                                options=["1. %s (%s)" % (name, number)])
+                wa = it.entities.get("via") == "whatsapp"
+                self._choices = {"kind": "wa_call" if wa else "call", "items": [{"name": name, "number": number}],
+                                 "sim": None, "video": bool(it.entities.get("video"))}
+                return Response("choose", "%s %s (%s) again? Say 1 or yes." % (
+                    "WhatsApp-call" if wa else "Call", name, number), options=["1. %s (%s)" % (name, number)])
             it.entities["number"], it.entities["display"] = number, name
             it.entities["confirm"] = True
             it.missing_fields = [f for f in it.missing_fields if f != "name"]
+        if n == "auto_send":
+            return self.auto_send_status()
         if n == "device_info":
             return self._info(it.entities.get("category"))
         if n == "add_todo":
@@ -413,7 +418,51 @@ class Assistant:
     # User's choice: call immediately (no Approve tap) when the target is unambiguous.
     # Still asks when: several contacts match, the named SIM is not in the phone, or a
     # permission is missing. Audit records that no approval was required, never who/which number.
+    # ---------- WhatsApp calls ----------
+    # Same rules as phone calls (user's choice: no Approve tap when exactly one contact matches);
+    # the call is started through WhatsApp's own contact entry, not by pressing buttons.
+    def _wa_call(self, ent):
+        if not ent.get("name") and not ent.get("number"):
+            return Response("need_info", "Who should I call on WhatsApp?")
+        if not hasattr(self.messages, "whatsapp_call") or not self.messages.capability_check():
+            return Response("unsupported", "WhatsApp calls are not available on this device.")
+        if self.contacts.permission_check() == "denied":
+            return Response("need_permission", "WhatsApp calls need permission to read contacts. Allow it and say "
+                            "the same thing again.", permissions=[READ_CONTACTS])
+        video = bool(ent.get("video"))
+        if ent.get("number"):
+            return self._wa_call_go(ent.get("display") or ent["number"], ent["number"], video)
+        try:
+            matches, exact = self._match_contacts(ent["name"], ent.get("prefix"))
+        except Exception as ex:
+            return Response("error", "Could not read contacts: %s" % type(ex).__name__)
+        if not matches:
+            return Response("info", "No contact found for '%s'. No call was made." % ent["name"])
+        if len(matches) == 1 and exact:
+            return self._wa_call_go(matches[0]["name"], matches[0]["number"], video)
+        self._choices = {"kind": "wa_call", "items": matches[:5], "sim": None, "video": video}
+        return Response("choose", "Whom should I call on WhatsApp?",
+                        options=["%d. %s (%s)" % (i + 1, m["name"], m["number"]) for i, m in enumerate(matches[:5])])
+
+    def _wa_call_go(self, name, number, video):
+        kind = "video" if video else "voice"
+        r = self.messages.whatsapp_call(number, video)
+        self.store.audit("-", "whatsapp_call", "not_required:user_setting_direct_call", r.status)
+        if r.status == "done":
+            self._last_contact = (name, number)
+            return Response("info", "Starting a WhatsApp %s call with %s." % (kind, name))
+        if r.detail == "not_on_whatsapp":
+            o = self.messages.open_whatsapp(number, "")
+            if o.status == "handed_off":
+                self._last_contact = (name, number)
+                return Response("info", "WhatsApp has no call entry for %s (not on WhatsApp, or not synced yet). "
+                                        "Opened the chat: tap the %s call button." % (name, kind))
+            return Response("error", "%s does not seem to be on WhatsApp. No call was made." % name)
+        return Response("error", "Could not start the WhatsApp call: %s. No call was made." % r.detail)
+
     def _call(self, it):
+        if it.entities.get("via") == "whatsapp":
+            return self._wa_call(it.entities)
         if it.missing_fields:
             return Response("need_info", "Who should I call? Type a name or number.")
         if not self.phone.capability_check():
@@ -542,6 +591,8 @@ class Assistant:
             return self._send(dict(c["ent"], channel=item))
         if c["kind"] == "msg_contact":
             return self._send_to(c["ent"], item["name"], item["number"], c["sim"])
+        if c["kind"] == "wa_call":
+            return self._wa_call_go(item["name"], item["number"], c.get("video"))
         return self._direct_call(item["name"], item["number"], c["sim"])
 
     # ---------- message now ----------
@@ -946,6 +997,37 @@ class Assistant:
         label = " (%s)" % ent["label"] if ent.get("label") else ""
         return Response("info", "Alarm set for %s%s%s in your Clock app." % (_clock12(h, m), when, label))
 
+    AUTO_SEND_RECHECK = 0.8   # seconds: one more look when the first answer is 'off' (tests set 0)
+    AUTO_SEND_SETTLE = 15.0   # seconds to keep looking right after the Settings screen was opened
+
+    def auto_send_ready(self):
+        """Is WhatsApp auto-send on? Runs on the worker thread. On the test phone (vivo) opening the
+        Accessibility settings screen switched the service off while it was shown, and it came back
+        on by itself ~10 s after leaving it: within 30 s of that screen, keep looking for up to 15 s
+        before answering 'off'. Otherwise one more look after 0.8 s."""
+        ask = getattr(self.messages, "auto_send_ready", lambda: False)
+        ready = bool(ask())
+        if ready or self.AUTO_SEND_RECHECK <= 0 or not hasattr(self.messages, "arm_auto_send"):
+            return ready
+        recent = time.time() - float(getattr(self.messages, "settings_opened_at", 0) or 0) < 30
+        end = time.time() + (self.AUTO_SEND_SETTLE if recent else self.AUTO_SEND_RECHECK)
+        while time.time() < end:
+            time.sleep(min(1.0, self.AUTO_SEND_RECHECK))
+            if ask():
+                return True
+        return False
+
+    def auto_send_status(self):
+        """'auto send on karo' / Menu > WhatsApp auto-send: say whether it is on; offer the switch."""
+        if not hasattr(self.messages, "arm_auto_send"):
+            return Response("info", "WhatsApp auto-send works only in the phone app.")
+        if self.auto_send_ready():
+            return Response("info", "Yes, WhatsApp auto-send is ON: after I open a chat with your message "
+                            "typed, I press Send for you. (To switch it off: tap 'Auto-send settings'.)",
+                            extra="auto_send_settings")
+        return Response("info", "No, WhatsApp auto-send is OFF, so WhatsApp messages wait for you to press "
+                        "Send. Tap 'Turn on auto-send' to switch it on.", extra="auto_send_setup")
+
     def auto_send_report(self):
         """Called when the app comes back to the front after an auto-send: what happened?"""
         name, self._awaiting_send = self._awaiting_send, None
@@ -1041,7 +1123,7 @@ class Assistant:
                             options=["1. %s (%s)" % (name, number)])
         if ent["channel"] == "whatsapp":
             # User's choice: no confirmation card; if auto-send is switched on, Send is pressed for them.
-            auto = bool(getattr(self.messages, "auto_send_ready", lambda: False)())
+            auto = self.auto_send_ready()
             if auto:
                 self.messages.arm_auto_send(ent["text"])
             r = self.messages.open_whatsapp(number, ent["text"])
@@ -1054,7 +1136,7 @@ class Assistant:
                 self._awaiting_send = name
                 return Response("info", "Sending on WhatsApp to %s..." % name, extra="await_auto_send")
             return Response("info", "Opening WhatsApp chat with %s. The message is typed: press Send.\n"
-                            "To let the app press Send for you, turn on auto-send (button below)." % name,
+                            "To let the app press Send for you, tap 'Turn on auto-send'." % name,
                             extra="auto_send_setup")
         payload = {"name": name, "number": number, "text": ent["text"],
                    "sim_slot": sim[0] if sim else None, "sim_label": sim[1] if sim else None}

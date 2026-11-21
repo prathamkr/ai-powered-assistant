@@ -16,6 +16,8 @@ from pa.inference import ConstrainedParser, validate  # noqa: E402
 from pa.keys import DevFileKeyProvider, KeyUnavailable  # noqa: E402
 from pa.storage import Store  # noqa: E402
 
+Assistant.AUTO_SEND_RECHECK = 0  # no waiting in tests
+
 TZ = timezone(timedelta(hours=5, minutes=30))
 NOW = datetime(2026, 11, 20, 9, 0, tzinfo=TZ)
 KEY = bytes(range(32))  # TEST-ONLY static key
@@ -1282,6 +1284,15 @@ class FakeMessages(Adapter):  # TEST-ONLY mock
         return Result("handed_off", "whatsapp chat opened")
 
     auto, armed, result = False, None, None
+    wa_calls, not_on_whatsapp = None, ()
+
+    def whatsapp_call(self, number, video=False):
+        if self.wa_calls is None:
+            self.wa_calls = []
+        if number in self.not_on_whatsapp:
+            return Result("failed", "not_on_whatsapp")
+        self.wa_calls.append((number, video))
+        return Result("done", "whatsapp call started")
 
     def auto_send_ready(self):
         return self.auto
@@ -1324,6 +1335,42 @@ class SendNow(unittest.TestCase):
                              ("rahul ko call karo", "call_contact"), ("kal ki photos dikhao", "find_photos"),
                              ("har subah 8 baje mummy ko 'hi' bhejo", "schedule_message")):
             self.assertEqual(self.P.parse(text, self.D)["intent"], intent, text)
+
+    def test_auto_send_switch_command(self):
+        # "auto send on karo" offers the switch when it is off, and says ON when it is on
+        for text in ("auto send on karo", "turn on auto-send", "autosend chalu karo", "is auto send on?",
+                     "enable whatsapp auto send"):
+            self.assertEqual(self.P.parse(text, self.D)["intent"], "auto_send", text)
+        a = self.mk()
+        self.msg.auto = False
+        r = a.handle("auto send on karo")
+        self.assertIn("OFF", r.text)
+        self.assertEqual(r.extra, "auto_send_setup")
+        self.msg.auto = True
+        r = a.handle("auto send on karo")
+        self.assertIn("ON", r.text)
+        self.assertEqual(r.extra, "auto_send_settings")
+        self.assertEqual(self.msg.whatsapp, [])  # nothing was opened or sent
+
+    def test_auto_send_waits_after_settings_screen(self):
+        # vivo: the Settings screen switches the service off; it comes back ~10 s later by itself.
+        # Right after that screen the app keeps looking instead of answering OFF at once.
+        a = self.mk()
+        a.AUTO_SEND_RECHECK, a.AUTO_SEND_SETTLE = 0.01, 0.5
+        calls = {"n": 0}
+
+        def comes_back():
+            calls["n"] += 1
+            return calls["n"] >= 5
+        self.msg.auto_send_ready = comes_back
+        import time as _t
+        self.msg.settings_opened_at = _t.time()
+        self.assertIn("ON", a.handle("is auto send on?").text)
+        calls["n"] = -1000   # stays off: answers OFF after the wait
+        self.assertIn("OFF", a.handle("is auto send on?").text)
+        self.msg.settings_opened_at = 0   # long ago: only a quick second look, no long wait
+        calls["n"] = -3                   # (would come back on the 8th look)
+        self.assertIn("OFF", a.handle("is auto send on?").text)
 
     def test_whatsapp_opens_chat_without_sending(self):
         a = self.mk()
@@ -1396,6 +1443,27 @@ class SendNow(unittest.TestCase):
         a.handle("send a message hi to neha on whatsapp")
         self.msg.result = "timeout"
         self.assertIn("Not sent", a.auto_send_report().text)
+
+    def test_whatsapp_calls(self):
+        a = self.mk()
+        for text, want in (("call neha on whatsapp", ("9000000011", False)),
+                           ("neha 2 ko whatsapp pe call karo", ("9000000022", False)),
+                           ("whatsapp video call neha", ("9000000011", True))):
+            r = a.handle(text)
+            self.assertEqual(self.msg.wa_calls[-1], want, text)
+            self.assertTrue(r.text.startswith("Starting a WhatsApp"), r.text)
+        r = a.handle("call rahul on whatsapp")                 # two Rahuls -> asks
+        self.assertEqual(r.kind, "choose")
+        a.handle("2")
+        self.assertEqual(self.msg.wa_calls[-1], ("98111 22233", False))
+        r = a.handle("usko whatsapp call karo")                # context -> asks first
+        self.assertTrue(r.text.startswith("WhatsApp-call Rahul Verma"), r.text)
+        self.assertEqual(len(self.msg.wa_calls), 4)
+        self.msg.not_on_whatsapp = ("9000000001",)
+        r = a.handle("call mummy on whatsapp")                 # not on WhatsApp -> opens the chat instead
+        self.assertIn("Opened the chat", r.text)
+        self.assertEqual(self.msg.whatsapp[-1], ("9000000001", ""))
+        self.assertIn("No contact found", a.handle("call zzqx on whatsapp").text)
 
     def test_one_line_english_orders(self):
         book = DAILY_BOOK + [{"name": "Aman", "number": "9000000044"}]
