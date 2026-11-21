@@ -4,6 +4,7 @@ everything live.
 """
 import weakref
 
+from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.event import EventDispatcher
 from kivy.graphics import Color, Ellipse, Line, Rectangle, RoundedRectangle
@@ -13,10 +14,11 @@ from kivy.properties import (BooleanProperty, DictProperty, NumericProperty, Opt
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
+from kivy.uix.slider import Slider
 from kivy.uix.widget import Widget
 
 from . import config, fonts, themes
-from .iconset import ICONS
+from .iconset import glyph
 
 
 class ThemeState(EventDispatcher):
@@ -73,47 +75,31 @@ def gradient_texture(bl, br, tl, tr):
 
 
 # ---------- icons ----------
-class IconView(Widget):
+class IconView(Label):
+    """One icon from the icon font (see iconset.py). The glyph is centred in the widget's box and is
+    drawn by FreeType, so it is a smooth vector outline at any size."""
     name = StringProperty("none")
-    rgba = None
 
     def __init__(self, name="none", rgba=(1, 1, 1, 1), **kw):
-        super().__init__(**kw)
-        self.name, self.rgba = name, tuple(rgba)
-        self.bind(pos=self.redraw, size=self.redraw, name=self.redraw)
-        self.redraw()
+        super().__init__(text="", font_name=fonts.ICON, color=rgba, halign="center", valign="middle", **kw)
+        self.name = name
+        self.bind(name=self._sync, size=self._sync)
+        self._sync()
 
     def set_color(self, rgba):
-        self.rgba = tuple(rgba)
-        self.redraw()
+        self.color = tuple(rgba)
 
-    def redraw(self, *_):
-        self.canvas.clear()
-        prims = ICONS.get(self.name, [])
-        s = min(self.width, self.height)
-        if not prims or s <= 0:
-            return
-        x0, y0 = self.center_x - s / 2, self.center_y - s / 2
-        lw = max(dp(1.3), s * 0.072)
-        with self.canvas:
-            Color(*self.rgba)
-            for p in prims:
-                if p[0] == "l":
-                    flat = []
-                    for x, y in p[1]:
-                        flat += [x0 + x * s, y0 + y * s]
-                    Line(points=flat, width=lw, cap="round", joint="round", close=bool(p[2]))
-                else:
-                    r = p[3] * s
-                    Ellipse(pos=(x0 + p[1] * s - r, y0 + p[2] * s - r), size=(2 * r, 2 * r))
+    def _sync(self, *_):
+        self.text = glyph(self.name)
+        self.font_size = max(1.0, min(self.width, self.height))
+        self.text_size = self.size
 
 
-# ---------- round icon button (menu, avatar, mic, send...) ----------
+# ---------- round icon button (menu, mic, send, arrows...) ----------
 class RoundIcon(ButtonBehavior, Widget):
     """Circular icon button. kind: "flat" (icon only), "soft" (tinted disc) or "accent" (gradient disc)."""
     icon = StringProperty("none")
     kind = OptionProperty("flat", options=["flat", "soft", "accent"])
-    dot = StringProperty("")  # "" or a status colour role ("ok", "busy", "error") drawn at the corner
 
     def __init__(self, diameter=44, **kw):
         kw.setdefault("size_hint", (None, None))
@@ -122,7 +108,7 @@ class RoundIcon(ButtonBehavior, Widget):
         self._icon = IconView(size_hint=(None, None))
         self.add_widget(self._icon)
         self.bind(pos=self._draw, size=self._draw, icon=self._draw, kind=self._draw, state=self._draw,
-                  disabled=self._draw, dot=self._draw)
+                  disabled=self._draw)
         T.bind(version=self._draw)
         self._draw()
 
@@ -132,7 +118,6 @@ class RoundIcon(ButtonBehavior, Widget):
         alpha = 0.4 if self.disabled else 1.0
         down = self.state == "down"
         self.canvas.before.clear()
-        self.canvas.after.clear()
         if self.kind == "accent":
             fg = themes.best_on(themes.mix(T.h("accent"), T.h("accent2"), 0.5))
             tex = gradient_texture(T.h("accent2"), T.h("accent2"), T.h("accent"), T.h("accent2"))
@@ -142,7 +127,6 @@ class RoundIcon(ButtonBehavior, Widget):
                 Color(1, 1, 1, alpha)
                 Ellipse(pos=(cx - d / 2, cy - d / 2), size=(d, d), texture=tex)
         elif self.kind == "soft":
-            fg = T.h("accent")
             fg = themes.mix(T.h("text"), T.h("accent"), 0.5)
             with self.canvas.before:
                 Color(*themes.hex_to_rgba(themes.mix(T.h("surface"), T.h("accent"), 0.22), alpha))
@@ -155,19 +139,11 @@ class RoundIcon(ButtonBehavior, Widget):
             with self.canvas.before:
                 Color(1, 1, 1, 0.14)
                 Ellipse(pos=(cx - d / 2, cy - d / 2), size=(d, d))
-        isz = d * (0.5 if self.kind == "accent" else 0.58)
+        isz = d * (0.56 if self.kind == "accent" else 0.66)
         self._icon.size = (isz, isz)
         self._icon.pos = (cx - isz / 2, cy - isz / 2)
         self._icon.name = self.icon
         self._icon.set_color(themes.hex_to_rgba(fg, alpha))
-        if self.dot:
-            col = {"ok": "#22c55e", "busy": "#f59e0b", "error": "#ef4444"}.get(self.dot, "#22c55e")
-            r = d * 0.13
-            with self.canvas.after:
-                Color(*themes.hex_to_rgba(T.h("bg")))
-                Ellipse(pos=(cx + d * 0.28 - r - dp(1.5), cy - d * 0.34 - r - dp(1.5)), size=(2 * r + dp(3), 2 * r + dp(3)))
-                Color(*themes.hex_to_rgba(col))
-                Ellipse(pos=(cx + d * 0.28 - r, cy - d * 0.34 - r), size=(2 * r, 2 * r))
 
 
 # ---------- rounded text/icon button (dialogs, chips, menu rows) ----------
@@ -193,9 +169,12 @@ class ThemedButton(ButtonBehavior, BoxLayout):
         kw.setdefault("height", dp(48))
         super().__init__(**kw)
         self._icon = IconView(size_hint=(None, None))
-        self._label = Label(markup=False, size_hint_x=None if not self.wide else 1)
-        self.add_widget(self._icon)
-        self.add_widget(self._label)
+        self._label = Label(markup=False, font_name=fonts.BUTTON, size_hint_x=None if not self.wide else 1,
+                            valign="middle")
+        self._lead, self._trail = Widget(size_hint=(None, 1), width=0), Widget(size_hint=(None, 1), width=0)
+        self._gap = Widget(size_hint=(None, 1), width=0)
+        for w in (self._lead, self._icon, self._gap, self._label, self._trail):
+            self.add_widget(w)
         with self.canvas.before:
             self._bg_color = Color(0, 0, 0, 1)
             self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(12)])
@@ -204,7 +183,7 @@ class ThemedButton(ButtonBehavior, BoxLayout):
                   font_px=self._style)
         self._label.bind(texture_size=self._label_size)
         if self.wide:
-            self._label.bind(width=lambda *_: setattr(self._label, "text_size", (self._label.width, None)))
+            self._label.bind(size=lambda *_: setattr(self._label, "text_size", self._label.size))
         self.bind(minimum_width=self._fit)
         T.bind(version=self._style)
         self._style()
@@ -232,7 +211,8 @@ class ThemedButton(ButtonBehavior, BoxLayout):
         h = self.height
         self.orientation = "horizontal"
         self.padding = [dp(12), dp(4)]
-        self.spacing = dp(8)
+        self.spacing = 0
+        self._gap.width = dp(8) if (show_icon and show_text) else 0
 
         if self.kind in ("accent", "selected"):
             bg = themes.mix(T.h("accent"), T.h("accent2"), 0.35)
@@ -266,7 +246,46 @@ class ThemedButton(ButtonBehavior, BoxLayout):
         self._icon.size_hint = (None, None)
         self._icon.pos_hint = {"center_y": 0.5}
         self._label.pos_hint = {"center_y": 0.5}
+        flex = self.halign == "center" and not self.wide     # centre the content inside a wider button
+        for pad_widget in (self._lead, self._trail):
+            pad_widget.size_hint_x = 1 if flex else None
+            pad_widget.width = 0
         self._fit()
+
+
+# ---------- slider with a themed track and knob ----------
+class LazeySlider(Slider):
+    """Kivy's Slider with its own look: a thin rounded track, an accent-coloured filled part and a round knob.
+    Touch handling, min/max/step/value are the stock Slider's."""
+
+    def __init__(self, **kw):
+        kw.setdefault("background_width", 0)      # hide the stock track, knob and value line
+        kw.setdefault("cursor_size", (0, 0))
+        kw.setdefault("value_track", False)
+        super().__init__(**kw)
+        self.bind(pos=self._paint, size=self._paint, value=self._paint, min=self._paint, max=self._paint)
+        T.bind(version=self._paint)
+        self._paint()
+        Clock.schedule_once(self._paint, 0)
+        Clock.schedule_once(self._paint, 0.15)
+
+    def _paint(self, *_):
+        pad = self.padding
+        x0, x1 = self.x + pad, self.right - pad
+        y = self.center_y
+        frac = self.value_normalized
+        kx = x0 + (x1 - x0) * frac
+        r = min(dp(11), self.height / 2 - dp(1))
+        self.canvas.after.clear()
+        with self.canvas.after:
+            Color(*themes.hex_to_rgba(themes.mix(T.h("panel"), T.h("accent"), 0.28)))
+            Line(points=[x0, y, x1, y], width=dp(3), cap="round")
+            Color(*T.c("accent"))
+            Line(points=[x0, y, max(x0, kx), y], width=dp(3), cap="round")
+            Color(*themes.hex_to_rgba(T.h("accent"), 0.22))
+            Ellipse(pos=(kx - r - dp(4), y - r - dp(4)), size=(2 * (r + dp(4)), 2 * (r + dp(4))))
+            Color(*themes.hex_to_rgba(themes.mix(T.h("accent"), "#ffffff", 0.2)))
+            Ellipse(pos=(kx - r, y - r), size=(2 * r, 2 * r))
 
 
 # ---------- surfaces (rounded fills drawn behind a widget) ----------
@@ -339,20 +358,11 @@ def backdrop(widget):
     return widget
 
 
-# ---------- model for the little status dot ----------
+# ---------- text shown on request ----------
 class Status(EventDispatcher):
-    """`text` is what the old status label showed; `level` drives the avatar's dot colour."""
+    """What the assistant is doing ("Parser: ...", "Listening..."). Kept for the app's own logic; Lazey
+    no longer shows a status indicator on screen."""
     text = StringProperty("starting...")
-    level = StringProperty("busy")
-
-    def on_text(self, _i, value):
-        v = value.lower()
-        if v.startswith(("error", "blocked")):
-            self.level = "error"
-        elif v.startswith(("thinking", "starting", "listening", "recognizing")):
-            self.level = "busy"
-        else:
-            self.level = "ok"
 
 
 # ---------- styling helpers for stock widgets ----------
@@ -416,6 +426,7 @@ def _popup_style(pop):
     pop.title_color = T.c("text")
     pop.separator_color = T.c("accent")
     pop.title_font = fonts.HEADING
+    pop.title_align = "center"
     pop.title_size = sp(17)
 
 

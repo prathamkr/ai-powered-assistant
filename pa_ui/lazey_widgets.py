@@ -94,9 +94,9 @@ class Hero(BoxLayout):
                          font_size=sp(16))
         self._tint()
         T.bind(version=self._tint)
-        grid = GridLayout(cols=2, size_hint_y=None, height=dp(88), spacing=dp(8), padding=[dp(14), dp(8), dp(14), 0])
+        grid = GridLayout(cols=2, size_hint_y=None, height=dp(104), spacing=dp(8), padding=[dp(14), dp(8), dp(14), 0])
         for label, fill in SUGGESTIONS:
-            b = ThemedButton(text=label, mode="text", kind="ghost", wide=True, halign="center", font_px=12, height=dp(38))
+            b = ThemedButton(text=label, mode="text", kind="ghost", wide=True, halign="center", font_px=12, height=dp(46))
             b.bind(on_release=lambda _b, f=fill: on_pick(f))
             grid.add_widget(b)
         for w in (self.orb, self.hey, self.ask, grid):
@@ -165,7 +165,7 @@ class Brand(BoxLayout):
 
     def __init__(self, align="center", tagline=True, **kw):
         super().__init__(orientation="vertical", spacing=dp(4), **kw)
-        row = BoxLayout(size_hint_y=None, height=dp(34), spacing=dp(8))
+        row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
         self.logo = IconView("wave", size_hint=(None, None), size=(dp(34), dp(34)))
         self.logo.pos_hint = {"center_y": 0.5}
         self.title = Label(text=config.APP_NAME, font_name=fonts.HEADING, font_size=sp(24), size_hint_x=None,

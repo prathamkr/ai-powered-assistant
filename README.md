@@ -99,9 +99,9 @@ Calendar actions report "not available" on desktop (correct behaviour).
 
 ## Look and customisation
 The screen is a dark, glowing design: wave logo and **Lazey** title with a tagline pill, a menu
-button (top corner), a status avatar (tap it to see what the assistant is doing; the dot is green when ready,
-amber when busy, red on an error), a greeting with an animated orb while the chat is empty, chat bubbles,
-and a rounded typing bar (`+` quick prompts, text box, mic, send).
+button (top corner), a greeting with an animated orb while the chat is empty, chat bubbles, and a rounded
+typing bar (`+` quick prompts, text box, mic, send). There is no status indicator; errors and what the
+assistant says appear in the chat.
 
 - **Menu button**: Theme, Calendar, Preferences, Voice. Calendar shows a month grid with dots on days that
   have tasks and the day's agenda (tasks can be deleted there; "Open phone calendar" works on Android only).
@@ -118,9 +118,12 @@ and a rounded typing bar (`+` quick prompts, text box, mic, send).
   defaults are used. Colour changes never touch the assistant core (`pa/`).
 - Mic and Voice call optional hooks (`app.voice_input`, `app.voice_settings`); without them they say
   "not connected in this build". This repo has no speech engine.
-- Fonts (in `pa_ui/fonts/`, SIL Open Font Licence, licences included): **Poppins SemiBold 600** for the app name,
-  headings and greeting; **Poppins Regular 400** for subtitles and descriptions; **Inter Regular 400** for the
-  message box, chat and smaller UI text. Inter is the default for every widget (`pa_ui/fonts.py`).
+- Fonts (in `pa_ui/fonts/`, licences included): **Poppins SemiBold 600** for the app name, headings and
+  greeting; **Poppins Medium 500** for button and chip labels; **Poppins Regular 400** for subtitles and
+  descriptions; **Inter Regular 400** for the message box, chat and smaller UI text (Inter is the default for
+  every widget); **Material Icons Round** (Apache-2.0) for every icon. Icons are a font, so they stay sharp at any
+  size. Glyph hinting is switched off for smoother letter shapes, and 4x multisampling smooths rings and waves
+  (`pa_ui/fonts.py`, `main.py`). Text is centred in its button, pill or heading.
 - Renaming note: the APK package is now `org.pa.lazey` (was `org.pa.localassistant`), so it installs as a
   new app and does not share the old app's encrypted data.
 

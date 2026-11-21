@@ -13,13 +13,12 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
-from kivy.uix.slider import Slider
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
 from . import config, fonts, themes
 from .iconset import CHOOSABLE
-from .widgets import T, ThemedButton, gradient_texture, style_input, style_label, style_popup, surface
+from .widgets import LazeySlider, T, ThemedButton, gradient_texture, style_input, style_label, style_popup, surface
 
 TABS = (("themes", "Themes"), ("colors", "Colours"), ("layout", "Layout"), ("buttons", "Buttons"))
 
@@ -36,7 +35,7 @@ def _col(**kw):
     return b
 
 
-def text_label(text, role="text", size=14, bold=False, halign="left", height=None):
+def text_label(text, role="text", size=14, bold=False, halign="center", height=None):
     face = fonts.HEADING if bold else (fonts.SUB if role == "muted" else fonts.UI)
     lb = Label(text=text, size_hint_y=None, halign=halign, valign="middle", font_name=face, font_size=sp(size))
     lb.bind(width=lambda *_: setattr(lb, "text_size", (lb.width, None)))
@@ -54,7 +53,8 @@ class ThemeCard(ButtonBehavior, BoxLayout):
         super().__init__(orientation="vertical", size_hint_y=None, height=dp(height), padding=dp(6), **kw)
         self.colors, self.selected = colors, selected
         self.caption = Label(text=name, size_hint_y=None, height=dp(22), font_size=sp(12.5), shorten=True,
-                             shorten_from="right", color=themes.hex_to_rgba(colors["text"]))
+                             shorten_from="right", halign="center", valign="middle",
+                             color=themes.hex_to_rgba(colors["text"]))
         self.caption.bind(width=lambda *_: setattr(self.caption, "text_size", (self.caption.width, None)))
         self.add_widget(Widget())
         self.add_widget(self.caption)
@@ -171,8 +171,7 @@ class StyleEditor:
     def slider(self, title, key, lo, hi, step, fmt):
         value = self.cfg["layout"][key]
         head = text_label("%s: %s" % (title, fmt(value)), size=13)
-        s = Slider(min=lo, max=hi, value=value, step=step, size_hint_y=None, height=dp(34), cursor_size=(dp(24), dp(24)),
-                   value_track=True, value_track_color=T.c("accent"))
+        s = LazeySlider(min=lo, max=hi, value=value, step=step, size_hint_y=None, height=dp(36))
         s.bind(value=lambda _s, v: self._on_slider(key, v, head, title, fmt))
         self.body.add_widget(head)
         self.body.add_widget(s)
@@ -247,7 +246,7 @@ class StyleEditor:
         self.body.add_widget(status)
         for sname in saved:
             r = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
-            r.add_widget(text_label("Saved: " + sname, size=13, height=40))
+            r.add_widget(text_label("Saved: " + sname, size=13, height=40, halign="left"))
             d = ThemedButton(text="Delete", icon="trash", mode="icon", height=dp(40), size_hint_x=None, width=dp(48))
             d.bind(on_release=lambda _b, n=sname: self.commit(config.delete_saved_theme(self.cfg, n)))
             r.add_widget(d)
@@ -285,8 +284,8 @@ class StyleEditor:
         sw.bind(pos=paint, size=paint)
         paint()
         names = BoxLayout(orientation="vertical")
-        names.add_widget(text_label(label, bold=True, size=13, height=20))
-        names.add_widget(text_label(hint, "muted", size=11, height=18))
+        names.add_widget(text_label(label, bold=True, size=13, height=20, halign="left"))
+        names.add_widget(text_label(hint, "muted", size=11, height=18, halign="left"))
         ti = style_input(TextInput(text=hexv, multiline=False, write_tab=False, size_hint=(None, None), width=dp(92),
                                    height=dp(40), padding=[dp(8), dp(10)], input_filter=lambda s, u: s if s in
                                    "#0123456789abcdefABCDEF" else ""))

@@ -2,7 +2,11 @@
 import os
 import threading
 
-from kivy.app import App
+from kivy.config import Config
+
+Config.set("graphics", "multisamples", "4")  # smooth edges: rings, waves, rounded shapes
+
+from kivy.app import App  # noqa: E402
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.metrics import dp
@@ -10,7 +14,6 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
-from kivy.uix.slider import Slider
 from kivy.uix.textinput import TextInput
 
 from pa import voice as V
@@ -22,7 +25,7 @@ from pa_ui.chrome import Chrome
 from pa_ui.config import APP_NAME, ConfigStore
 from pa_ui.editor import StyleEditor
 from pa_ui.lazey_widgets import SUGGESTIONS, Bubble
-from pa_ui.widgets import Status, T, ThemedButton, style_input, style_label, style_popup, surface
+from pa_ui.widgets import LazeySlider, Status, T, ThemedButton, style_input, style_label, style_popup, surface
 
 
 class AssistantApp(App):
@@ -43,7 +46,7 @@ class AssistantApp(App):
         self.pending = None  # (action_id, hash) of the proposal currently on screen
         self.working = False
 
-        self.status = Status()  # .text is shown from the avatar button; .level colours its dot
+        self.status = Status()  # what the assistant is doing; not shown on screen
 
         self.log = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
         self.log.bind(minimum_height=self.log.setter("height"))
@@ -54,7 +57,7 @@ class AssistantApp(App):
         self.card = BoxLayout(orientation="vertical", size_hint_y=None, height=0, opacity=0, spacing=dp(4),
                               padding=dp(12))
         surface(self.card, fill="surface", border=0.5, radius=22)
-        self.card_text = Label(text="", halign="left", valign="top", size_hint_y=1)
+        self.card_text = Label(text="", halign="center", valign="middle", size_hint_y=1)
         self.card_text.bind(size=lambda *_: setattr(self.card_text, "text_size", self.card_text.size))
         style_label(self.card_text)
         btns = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
@@ -375,7 +378,7 @@ class AssistantApp(App):
         s = self.vset
 
         def label(text, h=30, role="text"):
-            lb = Label(text=text, size_hint_y=None, height=dp(h), halign="left", valign="middle")
+            lb = Label(text=text, size_hint_y=None, height=dp(h), halign="center", valign="middle")
             lb.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
             box.add_widget(style_label(lb, role))
             return lb
@@ -412,8 +415,7 @@ class AssistantApp(App):
             for attr, title, lo, hi in (("pitch", "Pitch", V.PITCH_MIN, V.PITCH_MAX),
                                         ("rate", "Speed", V.RATE_MIN, V.RATE_MAX)):
                 lb = label("%s: %.2f" % (title, getattr(s, attr)))
-                sl = Slider(min=lo, max=hi, value=getattr(s, attr), size_hint_y=None, height=dp(36),
-                            value_track=True, value_track_color=T.c("accent"))
+                sl = LazeySlider(min=lo, max=hi, value=getattr(s, attr), size_hint_y=None, height=dp(36))
 
                 def changed(_w, v, attr=attr, title=title, lb=lb):
                     setattr(s, attr, round(v, 2))
@@ -502,18 +504,13 @@ class AssistantApp(App):
             return
         self.calendar_view.open()
 
-    def show_status(self):
-        """Tap the avatar: what the assistant is doing right now (the old status line)."""
-        self.popup("Status", style_label(Label(text=self.status.text, size_hint_y=None, height=dp(60), halign="left",
-                                               text_size=(dp(240), None))))
-
     def show_quick(self):
         """The + button: example prompts that fill the typing box."""
         box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
         box.bind(minimum_height=box.setter("height"))
         pop = self.popup("Quick prompts", box)
         for label, fill in SUGGESTIONS:
-            b = ThemedButton(text=label, mode="text", wide=True, halign="left", size_hint_x=1, height=dp(46))
+            b = ThemedButton(text=label, mode="text", wide=True, halign="center", size_hint_x=1, height=dp(46))
             b.bind(on_release=lambda _b, f=fill: (pop.dismiss(), self.chrome.fill_entry(f)))
             box.add_widget(b)
 

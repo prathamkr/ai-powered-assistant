@@ -37,7 +37,6 @@ class Chrome:
         self.root = BoxLayout(orientation="vertical")
         backdrop(self.root)
         self.status = self.chat = self.card = self.entry = self.hero = None
-        self._avatar = None
         self._drawer = None
 
     # -- public --
@@ -45,7 +44,6 @@ class Chrome:
         self.status, self.chat, self.card, self.entry = status, chat, card, entry
         style_bare_input(entry)
         self.hero = Hero(on_pick=self.fill_entry)
-        status.bind(level=lambda _s, v: self._avatar is not None and setattr(self._avatar, "dot", v))
         entry.bind(size=self._center_text)
         self.apply(self.cfg, save=False)
         return self.root
@@ -123,11 +121,8 @@ class Chrome:
         return btn
 
     def _header(self, lay):
-        menu = RoundIcon(diameter=46, icon="menu", kind="flat")
+        menu = RoundIcon(diameter=44, icon="menu", kind="flat")
         menu.bind(on_release=lambda *_: self.open_menu())
-        avatar = RoundIcon(diameter=46, icon="smile", kind="soft", dot=self.status.level)
-        avatar.bind(on_release=lambda *_: self.app.show_status())
-        self._avatar = avatar
         brand = Brand(align=lay["brand_align"], tagline=lay["show_tagline"])
         header = BoxLayout(size_hint_y=None, height=dp(76 if lay["show_tagline"] else 52))
 
@@ -139,7 +134,8 @@ class Chrome:
             box.add_widget(col)
             w.pos_hint = {}
             return box
-        left, right = (menu, avatar) if lay["menu_side"] == "left" else (avatar, menu)
+        spacer = Widget()  # same width as the menu button, so the title stays truly centred
+        left, right = (menu, spacer) if lay["menu_side"] == "left" else (spacer, menu)
         for w in (side(left), brand, side(right)):  # the brand centres itself or hugs the left (see Brand)
             header.add_widget(w)
         return header

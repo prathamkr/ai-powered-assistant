@@ -3,7 +3,7 @@ title = Lazey
 package.name = lazey
 package.domain = org.pa
 source.dir = .
-source.include_exts = py,ttf,txt
+source.include_exts = py,ttf,otf,txt
 source.exclude_dirs = tests, docs, bin, .buildozer, __pycache__
 version = 0.3
 # pycryptodome (not `cryptography`): has a python-for-android recipe and no Rust needed.

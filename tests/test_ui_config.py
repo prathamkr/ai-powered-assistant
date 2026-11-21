@@ -83,24 +83,40 @@ class ThemeTests(unittest.TestCase):
 
 
 class IconTests(unittest.TestCase):
-    def test_all_icons_stay_inside_the_unit_square(self):
-        for name, prims in iconset.ICONS.items():
-            for p in prims:
-                pts = p[1] if p[0] == "l" else [(p[1], p[2])]
-                for x, y in pts:
-                    self.assertTrue(0 <= x <= 1 and 0 <= y <= 1, (name, x, y))
+    FONT = os.path.join(os.path.dirname(__file__), "..", "pa_ui", "fonts", "MaterialIconsRound-Regular.otf")
+
+    def test_every_icon_is_one_private_use_glyph_or_empty(self):
+        for name, g in iconset.GLYPHS.items():
+            if name == "none":
+                self.assertEqual(g, "")
+            else:
+                self.assertEqual(len(g), 1, name)
+                self.assertTrue(0xE000 <= ord(g) <= 0xF8FF, (name, hex(ord(g))))
 
     def test_every_default_button_icon_exists_and_is_choosable(self):
         for bid, (_, icon, _) in C.BUTTONS.items():
             self.assertIn(icon, iconset.CHOOSABLE, bid)
 
-    def test_none_is_choosable_and_editor_icons_are_not(self):
+    def test_none_is_choosable_and_screen_icons_are_not(self):
         self.assertIn("none", iconset.CHOOSABLE)
-        self.assertNotIn("left", iconset.CHOOSABLE)
+        for name in ("left", "right", "close", "stop"):
+            self.assertNotIn(name, iconset.CHOOSABLE)
+            self.assertIn(name, iconset.GLYPHS)
 
     def test_icons_used_by_the_screens_exist(self):
-        for name in ("menu", "smile", "wave", "calendar", "trash", "left", "right", "check", "close"):
-            self.assertIn(name, iconset.ICONS)
+        for name in ("menu", "wave", "calendar", "trash", "left", "right", "check", "close", "stop", "mic", "send"):
+            self.assertTrue(iconset.glyph(name), name)
+        self.assertEqual(iconset.glyph("not-an-icon"), "")
+
+    def test_all_glyphs_exist_in_the_bundled_font(self):
+        try:
+            from fontTools.ttLib import TTFont
+        except ImportError:
+            self.skipTest("fontTools not installed")
+        cmap = TTFont(self.FONT).getBestCmap()
+        for name, g in iconset.GLYPHS.items():
+            if g:
+                self.assertIn(ord(g), cmap, name)
 
 
 class ConfigTests(unittest.TestCase):
@@ -251,19 +267,24 @@ class FontTests(unittest.TestCase):
     DIR = os.path.join(os.path.dirname(__file__), "..", "pa_ui", "fonts")
 
     def test_font_files_are_real_truetype_files(self):
-        for name in ("Poppins-SemiBold.ttf", "Poppins-Regular.ttf", "Inter-Regular.ttf"):
+        for name in ("Poppins-SemiBold.ttf", "Poppins-Medium.ttf", "Poppins-Regular.ttf", "Inter-Regular.ttf"):
             with open(os.path.join(self.DIR, name), "rb") as fh:
                 self.assertEqual(fh.read(4), b"\x00\x01\x00\x00", name)
+        with open(os.path.join(self.DIR, "MaterialIconsRound-Regular.otf"), "rb") as fh:
+            self.assertEqual(fh.read(4), b"OTTO")  # OpenType (CFF) icon font
 
     def test_licences_travel_with_the_fonts(self):
         for name in ("OFL-Poppins.txt", "OFL-Inter.txt"):
             with open(os.path.join(self.DIR, name), encoding="utf-8") as fh:
                 self.assertIn("SIL OPEN FONT LICENSE", fh.read().upper(), name)
+        with open(os.path.join(self.DIR, "LICENSE-MaterialIcons-Apache2.txt"), encoding="utf-8") as fh:
+            self.assertIn("APACHE LICENSE", fh.read().upper())
 
     def test_build_config_packages_fonts_and_uses_the_new_name(self):
         with open(os.path.join(os.path.dirname(__file__), "..", "buildozer.spec"), encoding="utf-8") as fh:
             spec = fh.read()
         self.assertRegex(spec, r"source\.include_exts = .*\bttf\b")
+        self.assertRegex(spec, r"source\.include_exts = .*\botf\b")
         self.assertIn("title = Lazey", spec)
         self.assertIn("package.name = lazey", spec)
 

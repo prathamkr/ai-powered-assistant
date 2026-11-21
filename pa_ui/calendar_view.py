@@ -118,7 +118,7 @@ class CalendarView:
         o.add_widget(grid)
 
         o.add_widget(style_label(Label(text=cl.day_title(self.sel), font_name=fonts.HEADING, size_hint_y=None,
-                                       height=dp(30), halign="left", font_size=sp(15)), "accent"))
+                                       height=dp(30), halign="center", font_size=sp(15)), "accent"))
         o.children[0].bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         agenda = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
         agenda.bind(minimum_height=agenda.setter("height"))
