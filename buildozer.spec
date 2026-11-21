@@ -14,7 +14,8 @@ p4a.branch = v2026.05.09
 orientation = portrait
 fullscreen = 0
 # Contacts/call/photos permissions are requested only when the user first uses that feature.
-android.permissions = READ_CALENDAR, READ_CONTACTS, CALL_PHONE, READ_PHONE_STATE,READ_MEDIA_IMAGES, READ_MEDIA_VISUAL_USER_SELECTED, (name=android.permission.READ_EXTERNAL_STORAGE;maxSdkVersion=32)
+android.permissions = READ_CALENDAR, READ_CONTACTS, CALL_PHONE, READ_PHONE_STATE, RECORD_AUDIO, READ_MEDIA_IMAGES, READ_MEDIA_VISUAL_USER_SELECTED, (name=android.permission.READ_EXTERNAL_STORAGE;maxSdkVersion=32)
+android.extra_manifest_xml = ./extra_manifest.xml
 android.api = 34
 android.minapi = 29
 android.archs = arm64-v8a

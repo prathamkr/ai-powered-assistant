@@ -14,6 +14,7 @@ READ_PHONE_STATE = "android.permission.READ_PHONE_STATE"
 READ_MEDIA_IMAGES = "android.permission.READ_MEDIA_IMAGES"
 READ_MEDIA_VISUAL_USER_SELECTED = "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
 READ_EXTERNAL_STORAGE = "android.permission.READ_EXTERNAL_STORAGE"
+RECORD_AUDIO = "android.permission.RECORD_AUDIO"
 
 
 def granted(perm):
