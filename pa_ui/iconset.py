@@ -31,16 +31,12 @@ GLYPHS = {
     "calendar": "",   # calendar_month
     "wave": "",       # graphic_eq
     "none": "",
-    # used by the screens themselves (not offered in the icon picker)
+    # state and navigation icons
     "stop": "",       # stop
     "left": "",       # chevron_left
     "right": "",      # chevron_right
     "close": "",      # close
 }
-
-EDITOR_ONLY = ("left", "right", "close", "stop")
-CHOOSABLE = [n for n in GLYPHS if n not in EDITOR_ONLY]
-
 
 def glyph(name):
     """The character to draw for an icon name ('' for unknown names and for 'none')."""

@@ -105,19 +105,13 @@ assistant says appear in the chat.
 
 - **Menu button**: Theme, Calendar, Preferences, Voice. Calendar shows a month grid with dots on days that
   have tasks and the day's agenda (tasks can be deleted there; "Open phone calendar" works on Android only).
-- **Theme** (menu > Theme), changes apply live and are saved on the phone:
-  - *Themes*: Violet (default), Ocean, Emerald, Rose, Amber, Graphite, Daylight (light), High contrast, plus your own.
-  - *Background colour*: 9 backdrops for the dark themes (Deep violet, Midnight blue, AMOLED black, Graphite,
-    Forest night, Wine, Deep teal, Slate, Ember) or the theme's own.
-  - *Colours*: every colour can be edited (hex or colour wheel) with a contrast warning.
-  - *Layout*: quick layouts (Lazey, Minimal, Big touch, Left-handed, Typing bar on top), title alignment,
-    menu side, typing bar position, greeting on/off, bubbles or plain text, sliders for sizes.
-  - *Buttons*: for every button choose its icon and name, move it earlier/later, and put it in the Menu,
-    before/after the text box, or hide it. The Theme entry can never be hidden.
-- Settings live in `ui_config.json` in the app's private folder; a damaged file is kept as `.bad` and
-  defaults are used. Colour changes never touch the assistant core (`pa/`).
-- Mic and Voice call optional hooks (`app.voice_input`, `app.voice_settings`); without them they say
-  "not connected in this build". This repo has no speech engine.
+  Voice sets when replies are spoken, the voice (Nova, Atlas, Echo, Luna, Spark), pitch, speed and offline
+  recognition. The mic button listens and turns into a stop button while it does.
+- **Theme** (menu > Theme): pick one of 8 themes (Violet by default, Ocean, Emerald, Rose, Amber, Graphite,
+  Daylight, High contrast). The change shows live and is remembered. The layout, button placement and
+  icons are fixed (see `DEFAULT_LAYOUT` / `DEFAULT_BUTTONS` in `pa_ui/config.py`).
+- Only the theme is stored, in `ui_config.json` in the app's private folder; a damaged file is kept as `.bad`
+  and the default theme is used. The theme never touches the assistant core (`pa/`).
 - Fonts (in `pa_ui/fonts/`, licences included): **Poppins SemiBold 600** for the app name, headings and
   greeting; **Poppins Medium 500** for button and chip labels; **Poppins Regular 400** for subtitles and
   descriptions; **Inter Regular 400** for the message box, chat and smaller UI text (Inter is the default for

@@ -1,30 +1,12 @@
-"""Colour themes and backgrounds. Pure Python (no Kivy) so it can be unit-tested anywhere.
+"""Colour themes. Pure Python (no Kivy) so it can be unit-tested anywhere.
 
-A theme maps every colour ROLE to a "#rrggbb" string. A BACKGROUND swaps only the background-ish
-roles (bg, bg2, panel, surface, input_bg) so any dark theme can sit on any of 9 backdrops. The user
-can also override single roles ("custom") or save the result as their own named theme.
+A theme maps every colour ROLE to a "#rrggbb" string.
 """
+
 import re
 
-# role -> (label shown in the editor, short hint)
-ROLES = {
-    "bg": ("Background (top)", "Top of the screen"),
-    "bg2": ("Background (bottom)", "Bottom of the screen"),
-    "panel": ("Menus and pop-ups", "Behind dialogs"),
-    "surface": ("Cards and bubbles", "Typing bar, replies"),
-    "button": ("Buttons", "Button fill"),
-    "button_text": ("Button text", "Text and icons on buttons"),
-    "accent": ("Accent", "Glow, highlights, Send"),
-    "accent2": ("Accent (second)", "Other end of the gradient"),
-    "text": ("Text", "Headings and general text"),
-    "muted": ("Soft text", "Tagline, hints"),
-    "user": ("Your messages", "Text you sent"),
-    "bot": ("Replies", "Assistant replies"),
-    "sys": ("Notes", "Status and warnings"),
-    "input_bg": ("Input fields", "Text boxes in dialogs"),
-    "input_text": ("Typed text", "Text you type"),
-}
-BG_ROLES = ("bg", "bg2", "panel", "surface", "input_bg")
+ROLES = ("bg", "bg2", "panel", "surface", "button", "button_text", "accent", "accent2", "text", "muted",
+         "user", "bot", "sys", "input_bg", "input_text")
 
 BUILTIN = {
     "violet": ("Violet", dict(
@@ -61,22 +43,6 @@ BUILTIN = {
         sys="#ffff00", input_bg="#ffffff", input_text="#000000")),
 }
 DEFAULT_THEME = "violet"
-SAVED_PREFIX = "user:"
-MAX_SAVED = 12
-
-# Nine backdrops for dark themes (id -> (name, colours for BG_ROLES))
-BACKGROUNDS = {
-    "violet": ("Deep violet", dict(bg="#0b0816", bg2="#150d2e", panel="#17112b", surface="#1d1640", input_bg="#241c4d")),
-    "midnight": ("Midnight blue", dict(bg="#060d1c", bg2="#0c1a3a", panel="#0f1930", surface="#15244a", input_bg="#1b2d5c")),
-    "black": ("AMOLED black", dict(bg="#000000", bg2="#0a0a0f", panel="#0c0c10", surface="#15151b", input_bg="#1d1d25")),
-    "graphite": ("Graphite", dict(bg="#0d0e10", bg2="#1a1c20", panel="#191b1f", surface="#23262b", input_bg="#2b2f36")),
-    "forest": ("Forest night", dict(bg="#06140e", bg2="#0b2a1d", panel="#0e2318", surface="#143324", input_bg="#17402c")),
-    "wine": ("Wine", dict(bg="#170812", bg2="#2e0f24", panel="#26101e", surface="#35162a", input_bg="#43203a")),
-    "teal": ("Deep teal", dict(bg="#04141a", bg2="#08323b", panel="#0b2229", surface="#103a45", input_bg="#144854")),
-    "slate": ("Slate", dict(bg="#0f1420", bg2="#1e2a3f", panel="#182032", surface="#232f46", input_bg="#2c3a56")),
-    "ember": ("Ember", dict(bg="#140a06", bg2="#2e150a", panel="#241209", surface="#351c0e", input_bg="#43250f")),
-}
-BACKGROUND_DEFAULT = "theme"  # "use the theme's own background"
 
 _HEX = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
@@ -129,47 +95,17 @@ def mix(a, b, t):
     return rgba_to_hex(tuple(ca[i] + (cb[i] - ca[i]) * t for i in range(3)))
 
 
-def is_light(colors):
-    return luminance(colors["bg"]) > 0.35
+def theme_ids():
+    return list(BUILTIN)
 
 
-def backdrop_applies(colors):
-    """Backdrops are dark: only offered for light-on-dark themes (not Daylight, not High contrast)."""
-    return not is_light(colors) and luminance(colors["input_text"]) > 0.5
+def theme_name(theme_id):
+    return BUILTIN[theme_id][0] if theme_id in BUILTIN else theme_id
 
 
-def theme_ids(saved):
-    return list(BUILTIN) + [SAVED_PREFIX + n for n in saved]
-
-
-def theme_name(theme_id, saved):
-    if theme_id in BUILTIN:
-        return BUILTIN[theme_id][0]
-    if theme_id.startswith(SAVED_PREFIX):
-        return theme_id[len(SAVED_PREFIX):]
-    return theme_id
-
-
-def base_colors(theme_id, saved):
-    """Full role->hex dict of a theme; unknown ids fall back to the default theme."""
-    if theme_id in BUILTIN:
-        return dict(BUILTIN[theme_id][1])
-    if theme_id.startswith(SAVED_PREFIX) and theme_id[len(SAVED_PREFIX):] in saved:
-        base = dict(BUILTIN[DEFAULT_THEME][1])
-        base.update(saved[theme_id[len(SAVED_PREFIX):]])
-        return base
-    return dict(BUILTIN[DEFAULT_THEME][1])
-
-
-def resolve(theme_id, custom, saved, background=BACKGROUND_DEFAULT):
-    """Final colours = theme, then the chosen backdrop (dark themes only), then per-role overrides."""
-    colors = base_colors(theme_id, saved)
-    if background in BACKGROUNDS and backdrop_applies(colors):
-        colors.update(BACKGROUNDS[background][1])
-    for role, value in (custom or {}).items():
-        if role in ROLES and valid_hex(value):
-            colors[role] = norm_hex(value)
-    return colors
+def resolve(theme_id):
+    """Colours of a theme (role -> hex); unknown ids fall back to the default theme."""
+    return dict(BUILTIN.get(theme_id, BUILTIN[DEFAULT_THEME])[1])
 
 
 # (foreground role, background role, minimum ratio) pairs the editor warns about
