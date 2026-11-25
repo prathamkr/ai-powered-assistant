@@ -206,6 +206,7 @@ class Assistant:
         self._pending = None  # schedule request waiting for a missing detail
         self._choices = None  # latest 'which one?' list: {"kind": call|app|daily_channel|daily_contact, ...}
         self._pending_msg = None  # message waiting for its missing person or text
+        self._pending_wa_call = None  # WhatsApp call waiting for "who?" ({"video": bool})
         self._awaiting_send = None  # name whose WhatsApp auto-send result is still to be reported
         self._pending_alarm = None  # (intent, entities) waiting for a time / length
         self._photo_ids = set()  # only photos from the last search may be opened
@@ -258,6 +259,19 @@ class Assistant:
                     key = "number" if re.fullmatch(r"\+?[\d \-]{7,}", answer) else "name"
                     return self._send(dict(pend["ent"], **{key: answer.lower() if key == "name" else answer}))
                 return self._send(dict(pend["ent"], text=answer))
+        if self._pending_wa_call is not None:
+            # "whatsapp call karo" -> "Who should I call on WhatsApp?" -> "neha" / "9876543210"
+            pend, self._pending_wa_call = self._pending_wa_call, None
+            if validate(self.backend.parse(text, now.date()), now.date()).intent == "unknown":
+                answer = re.sub(r"^(?:to|ko)\s+|\s+(?:ko)$", "", text.strip(" .!"), flags=re.I)
+                again = validate(self.backend.parse("call " + answer, now.date()), now.date())
+                ent = dict(again.entities)
+                ent.pop("sim", None)
+                if again.intent == "call_contact" and (ent.get("name") or ent.get("number")):
+                    ent["via"] = "whatsapp"
+                    if pend["video"]:
+                        ent["video"] = True
+                    return self._wa_call(ent)
         if self._pending is not None and hasattr(self.backend, "followup"):
             extra = self.backend.followup(text)
             if extra:
@@ -423,7 +437,9 @@ class Assistant:
     # the call is started through WhatsApp's own contact entry, not by pressing buttons.
     def _wa_call(self, ent):
         if not ent.get("name") and not ent.get("number"):
-            return Response("need_info", "Who should I call on WhatsApp?")
+            self._pending_wa_call = {"video": bool(ent.get("video"))}
+            return Response("need_info", "Who should I %s on WhatsApp?" % (
+                "video-call" if ent.get("video") else "call"))
         if not hasattr(self.messages, "whatsapp_call") or not self.messages.capability_check():
             return Response("unsupported", "WhatsApp calls are not available on this device.")
         if self.contacts.permission_check() == "denied":
@@ -451,6 +467,8 @@ class Assistant:
         if r.status == "done":
             self._last_contact = (name, number)
             return Response("info", "Starting a WhatsApp %s call with %s." % (kind, name))
+        if r.detail == "not_installed":
+            return Response("error", "WhatsApp is not installed on this phone. No call was made.")
         if r.detail == "not_on_whatsapp":
             o = self.messages.open_whatsapp(number, "")
             if o.status == "handed_off":
@@ -922,7 +940,10 @@ class Assistant:
         return Response("info", "Routine '%s' will no longer run at a set time (you can still say it)." % r["name"])
 
     # ---------- several commands in one line / a routine ----------
-    LEAVES_APP = ("Opening", "Calling", "Dialer", "Sending on WhatsApp")
+    # A WhatsApp call (or its chat fallback) also leaves the app: a later step that opens an app
+    # or places a call would cut the WhatsApp call off.
+    LEAVES_APP = ("Opening", "Calling", "Dialer", "Sending on WhatsApp", "Starting a WhatsApp",
+                  "WhatsApp has no call entry")
 
     def _compound_parts(self, text, today):
         """'set an alarm for 6 and open whatsapp' -> 2 parts, only if every part is a command."""

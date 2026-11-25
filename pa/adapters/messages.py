@@ -158,38 +158,54 @@ class AndroidMessagesAdapter(Adapter):
     # contacts (ContactsContract.Data, these mimetypes, DATA1 = "<number>@s.whatsapp.net").
     # Opening such a row with ACTION_VIEW in WhatsApp starts the call: a normal intent, no screen
     # automation. Needs READ_CONTACTS.
-    WA_VOICE = "vnd.android.cursor.item/vnd.com.whatsapp.voip.call"
-    WA_VIDEO = "vnd.android.cursor.item/vnd.com.whatsapp.video.call"
+    # (package, mimetype prefix): WhatsApp first, then WhatsApp Business (its own rows and prefix).
+    WA_APPS = (("com.whatsapp", "vnd.android.cursor.item/vnd.com.whatsapp"),
+               ("com.whatsapp.w4b", "vnd.android.cursor.item/vnd.com.whatsapp.w4b"))
+
+    @staticmethod
+    def wa_call_mime(prefix, video):
+        return prefix + (".video.call" if video else ".voip.call")
+
+    @staticmethod
+    def wa_row_matches(data1, want):
+        """data1 is '<country code + number>@s.whatsapp.net'; want comes from wa_number()."""
+        digits = re.sub(r"\D", "", (data1 or "").split("@")[0])
+        if not digits or len(want) < 7:
+            return False
+        return digits == want or (len(digits) >= 10 and len(want) >= 10 and digits[-10:] == want[-10:])
 
     def whatsapp_call(self, number, video=False):
-        """'done' = WhatsApp call started; 'failed' with detail 'not_on_whatsapp' when the number
-        has no WhatsApp call entry (not on WhatsApp, or WhatsApp has not synced it yet)."""
+        """'done' = WhatsApp call started. 'failed' with detail 'not_installed' when neither
+        WhatsApp nor WhatsApp Business is on the phone, 'not_on_whatsapp' when the number has no
+        WhatsApp call entry (not on WhatsApp, or WhatsApp has not synced it yet). Any other
+        detail is the error's name."""
         if not au.ANDROID:
             return Result("unsupported", "not running on Android")
-        mime = self.WA_VIDEO if video else self.WA_VOICE
         try:
+            pm = au.mActivity.getPackageManager()
+            apps = [(pkg, self.wa_call_mime(prefix, video)) for pkg, prefix in self.WA_APPS
+                    if pm.getLaunchIntentForPackage(pkg) is not None]
+            if not apps:
+                return Result("failed", "not_installed")
             Data = au.autoclass("android.provider.ContactsContract$Data")
-            cur = au.mActivity.getContentResolver().query(Data.CONTENT_URI, ["_id", "data1"], "mimetype=?",
-                                                          [mime], None)
             want = wa_number(number)
-            row = None
-            for rid, d1 in au.rows(cur, 2):
-                digits = re.sub(r"\D", "", (d1 or "").split("@")[0])
-                if digits and want and (digits == want or digits[-10:] == want[-10:]):
-                    row = rid
-                    break
-            if row is None:
-                return Result("failed", "not_on_whatsapp")
-            Intent = au.autoclass("android.content.Intent")
-            Uri = au.autoclass("android.net.Uri")
-            it = Intent(Intent.ACTION_VIEW)
-            it.setDataAndType(Uri.parse("content://com.android.contacts/data/%s" % row), mime)
-            it.setPackage("com.whatsapp")
-            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            au.mActivity.startActivity(it)
-            return Result("done", "whatsapp call started")
+            for pkg, mime in apps:
+                cur = au.mActivity.getContentResolver().query(Data.CONTENT_URI, ["_id", "data1"], "mimetype=?",
+                                                              [mime], None)
+                row = next((rid for rid, d1 in au.rows(cur, 2) if self.wa_row_matches(d1, want)), None)
+                if row is None:
+                    continue
+                Intent = au.autoclass("android.content.Intent")
+                Uri = au.autoclass("android.net.Uri")
+                it = Intent(Intent.ACTION_VIEW)
+                it.setDataAndType(Uri.parse("content://com.android.contacts/data/%s" % row), mime)
+                it.setPackage(pkg)
+                it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                au.mActivity.startActivity(it)
+                return Result("done", "whatsapp call started")
+            return Result("failed", "not_on_whatsapp")
         except Exception as ex:
-            return Result("failed", "could not start the WhatsApp call: %s" % type(ex).__name__)
+            return Result("failed", type(ex).__name__)
 
     def open_whatsapp(self, number, text):
         if not au.ANDROID:

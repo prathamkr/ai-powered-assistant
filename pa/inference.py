@@ -548,6 +548,10 @@ class ConstrainedParser(InferenceBackend):
             return {"intent": "open_app", "entities": {"app": app}}
         if re.search(r"\b(call|dial|phone|fone)\b", low) and not re.search(r"\b(%s)\b" % PHOTO_WORDS, low):
             # "call neha on whatsapp", "neha ko whatsapp pe call karo", "whatsapp video call neha"
+            # "wa" is short for WhatsApp only next to a connector or the call word ("call neha on
+            # wa", "neha ko wa pe call karo"), so a name like "Wa" is not taken for the app.
+            low = re.sub(r"\b(on|via|through|par|pe|se)\s+wa\b", r"\1 whatsapp", low)
+            low = re.sub(r"\bwa(?=\s+(?:pe|par|se|call|video|voice)\b)", "whatsapp", low)
             wa = re.search(r"\b(what'?s\s?app|wh?ats?app|whatsap)\b", low)
             video = bool(re.search(r"\bvideo\b", low))
             if wa or video:

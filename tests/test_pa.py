@@ -1284,11 +1284,13 @@ class FakeMessages(Adapter):  # TEST-ONLY mock
         return Result("handed_off", "whatsapp chat opened")
 
     auto, armed, result = False, None, None
-    wa_calls, not_on_whatsapp = None, ()
+    wa_calls, not_on_whatsapp, wa_installed = None, (), True
 
     def whatsapp_call(self, number, video=False):
         if self.wa_calls is None:
             self.wa_calls = []
+        if not self.wa_installed:
+            return Result("failed", "not_installed")
         if number in self.not_on_whatsapp:
             return Result("failed", "not_on_whatsapp")
         self.wa_calls.append((number, video))
@@ -1464,6 +1466,61 @@ class SendNow(unittest.TestCase):
         self.assertIn("Opened the chat", r.text)
         self.assertEqual(self.msg.whatsapp[-1], ("9000000001", ""))
         self.assertIn("No contact found", a.handle("call zzqx on whatsapp").text)
+
+    def test_whatsapp_call_short_name_wa(self):
+        for text in ("call neha on wa", "neha ko wa pe call karo", "wa call neha", "wa video call neha"):
+            a = self.mk()
+            r = a.handle(text)
+            self.assertEqual(self.msg.wa_calls, [("9000000011", "video" in text)], "%s -> %s" % (text, r.text))
+
+    def test_whatsapp_call_is_not_cut_off_by_a_later_step(self):
+        # a phone call or app right after a WhatsApp call would end the WhatsApp call
+        a = self.mk()
+        r = a.handle("video call neha then call mummy")
+        self.assertEqual(self.msg.wa_calls, [("9000000011", True)])
+        self.assertEqual(a.phone.calls, [])
+        self.assertIn("Not run because another app is already open: call mummy", r.text)
+        self.msg.not_on_whatsapp = ("9000000001",)               # chat fallback leaves the app too
+        r = a.handle("call mummy on whatsapp and call neha")
+        self.assertEqual(a.phone.calls, [])
+        self.assertIn("Not run because", r.text)
+
+    def test_whatsapp_call_asks_who_and_uses_the_answer(self):
+        a = self.mk()
+        self.assertEqual(a.handle("whatsapp call karo").text, "Who should I call on WhatsApp?")
+        r = a.handle("neha")
+        self.assertEqual(self.msg.wa_calls, [("9000000011", False)], r.text)
+        self.assertEqual(a.handle("video call karo").text, "Who should I video-call on WhatsApp?")
+        a.handle("mummy ko")
+        self.assertEqual(self.msg.wa_calls[-1], ("9000000001", True))
+        a.handle("whatsapp call karo")
+        a.handle("98765 43210")
+        self.assertEqual(self.msg.wa_calls[-1], ("9876543210", False))
+        a.handle("whatsapp call karo")                          # a new command drops the question
+        self.assertNotIn("WhatsApp", a.handle("open calculator").text[:20])
+        self.assertEqual(len(self.msg.wa_calls), 3)
+        self.assertEqual(a.handle("neha").kind, "info")         # "neha" alone is no longer an answer
+        self.assertEqual(len(self.msg.wa_calls), 3)
+
+    def test_whatsapp_not_installed(self):
+        a = self.mk()
+        self.msg.wa_installed = False
+        r = a.handle("call neha on whatsapp")
+        self.assertEqual(r.text, "WhatsApp is not installed on this phone. No call was made.")
+        self.assertEqual(self.msg.whatsapp, [])                 # no browser page claimed as "the chat"
+
+    def test_whatsapp_call_row_matching(self):
+        from pa.adapters.messages import AndroidMessagesAdapter as M, wa_number
+        want = wa_number("98765 43210")
+        self.assertTrue(M.wa_row_matches("919876543210@s.whatsapp.net", want))
+        self.assertTrue(M.wa_row_matches("9876543210@s.whatsapp.net", want))
+        self.assertFalse(M.wa_row_matches("919876543211@s.whatsapp.net", want))
+        self.assertFalse(M.wa_row_matches("", want))
+        self.assertFalse(M.wa_row_matches("919876543210@s.whatsapp.net", wa_number("100")))
+        self.assertEqual(M.wa_call_mime(M.WA_APPS[1][1], True),
+                         "vnd.android.cursor.item/vnd.com.whatsapp.w4b.video.call")
+        self.assertEqual(M.wa_call_mime(M.WA_APPS[0][1], False),
+                         "vnd.android.cursor.item/vnd.com.whatsapp.voip.call")
 
     def test_one_line_english_orders(self):
         book = DAILY_BOOK + [{"name": "Aman", "number": "9000000044"}]

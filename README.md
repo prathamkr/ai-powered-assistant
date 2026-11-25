@@ -92,7 +92,12 @@ WhatsApp calls: `call neha on whatsapp`, `neha ko whatsapp pe call karo`, `whats
 Same rules as phone calls (direct when exactly one contact matches, a list when several, asks first
 for "usko"). Started through WhatsApp's own "Voice call"/"Video call" contact entry (ContactsContract
 Data rows `vnd.com.whatsapp.voip.call` / `.video.call`) with a normal intent, no screen automation.
-If the number has no such entry, the chat opens and the user taps the call button. Verified on the
+If the number has no such entry, the chat opens and the user taps the call button. WhatsApp Business
+(`com.whatsapp.w4b`, rows `vnd.com.whatsapp.w4b.*`) is used when WhatsApp has no entry or is not
+installed; with neither installed the app says so and makes no call. "wa" works as short for
+WhatsApp (`call neha on wa`). `whatsapp call karo` / `video call karo` ask "Who...?" and the next
+reply is the person. In a routine or a one-line "... then ...", steps after a WhatsApp call that
+would open an app or place a call are skipped, so the WhatsApp call is not cut off. Verified on the
 phone with a contact that does not exist and a number that is not on WhatsApp (no call was made);
 a real WhatsApp call was not placed during testing.
 Auto-send note: Android switches the auto-send accessibility service OFF whenever the app is updated
