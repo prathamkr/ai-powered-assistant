@@ -17,6 +17,10 @@ LANGUAGE = "en-IN"  # Indian English: the recognizer writes Hinglish in Latin le
 PITCH_MIN, PITCH_MAX = 0.7, 1.4
 RATE_MIN, RATE_MAX = 0.6, 1.6
 SPEAK_MODES = ("voice", "always", "off")  # speak replies: after voice input / always / never
+# who turns speech into text: Lazey's own voice pack (Vosk + Indian English model, inside the APK,
+# works on every phone with no download) or the phone's on-device recognizer (pack downloaded once)
+ENGINES = ("builtin", "phone")
+DEFAULT_ENGINE = "builtin"
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,7 @@ class VoiceSettings:
     voice_index: int = 0
     speak_mode: str = "voice"
     prefer_offline: bool = True
+    engine: str = DEFAULT_ENGINE
     # WhatsApp auto-send was on once. Android switches accessibility services off when the app
     # is updated, so on start the app reminds the user if it is off again.
     auto_send_wanted: bool = False
@@ -77,7 +82,8 @@ class VoiceSettings:
         except (TypeError, ValueError):
             pass
         d.speak_mode = self.speak_mode if self.speak_mode in SPEAK_MODES else "voice"
-        d.prefer_offline = bool(self.prefer_offline)
+        d.prefer_offline = True   # the "Allow online" choice was removed: listening is always offline-only
+        d.engine = self.engine if self.engine in ENGINES else DEFAULT_ENGINE
         d.auto_send_wanted = bool(self.auto_send_wanted)
         return d
 

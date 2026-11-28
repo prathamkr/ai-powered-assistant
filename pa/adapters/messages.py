@@ -59,6 +59,15 @@ class AndroidMessagesAdapter(Adapter):
             except Exception:
                 self._auto = None
 
+    def default_sms_package(self):
+        """The phone's default SMS app (Settings > Customize lists SMS only when there is one)."""
+        try:
+            Sms = au.autoclass("android.provider.Telephony$Sms")
+            p = Sms.getDefaultSmsPackage(au.mActivity)
+            return str(p) if p else None
+        except Exception:
+            return None
+
     # ---- WhatsApp auto-send (Accessibility service, user switches it on) ----
     def auto_send_ready(self):
         # Android switches this service OFF when the app is updated or force-stopped, so an
@@ -190,6 +199,23 @@ class AndroidMessagesAdapter(Adapter):
             return Result("done", "whatsapp call started")
         except Exception as ex:
             return Result("failed", "could not start the WhatsApp call: %s" % type(ex).__name__)
+
+    def open_email(self, to, subject, body):
+        """Gmail (or the phone's mail app) opens with the email typed; the user presses Send."""
+        if not au.ANDROID:
+            return Result("unsupported", "not running on Android")
+        try:
+            Intent = au.autoclass("android.content.Intent")
+            Uri = au.autoclass("android.net.Uri")
+            uri = Uri.parse("mailto:%s?subject=%s&body=%s" % (Uri.encode(to, "@."), Uri.encode(subject), Uri.encode(body)))
+            it = Intent(Intent.ACTION_SENDTO, uri)
+            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if au.mActivity.getPackageManager().getLaunchIntentForPackage("com.google.android.gm") is not None:
+                it.setPackage("com.google.android.gm")
+            au.mActivity.startActivity(it)
+            return Result("handed_off", "email opened")
+        except Exception as ex:
+            return Result("failed", "could not open the mail app: %s" % type(ex).__name__)
 
     def open_whatsapp(self, number, text):
         if not au.ANDROID:

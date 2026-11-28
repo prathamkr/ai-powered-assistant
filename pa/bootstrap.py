@@ -6,6 +6,7 @@ from .adapters.alarms import AndroidAlarmsAdapter
 from .adapters.apps import AndroidAppsAdapter
 from .adapters.calendar import ANDROID, AndroidCalendarAdapter
 from .adapters.contacts import AndroidContactsAdapter
+from .adapters.control import AndroidControlAdapter
 from .adapters.daily_android import AndroidDailyAdapter
 from .adapters.device_info import AndroidDeviceInfoAdapter
 from .adapters.messages import AndroidMessagesAdapter
@@ -16,6 +17,26 @@ from .crypto import Crypto
 from .inference import load_backend
 from .keys import AndroidKeystoreKeyProvider, DevFileKeyProvider, KeyUnavailable  # noqa: F401
 from .storage import Store
+
+
+def reset_encrypted_store(data_dir):
+    """After an unrecoverable key error: move the unreadable database and key file aside (renamed to
+    *.broken-<time>, not deleted) and forget the Keystore key, so the next start creates a fresh store.
+    Returns the names that were moved."""
+    import time
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    moved = []
+    for name in ("pa.db", "pa.db-wal", "pa.db-shm", "dek.wrapped", "dek.wrapped.tmp", "dev.key"):
+        p = os.path.join(data_dir, name)
+        if os.path.exists(p):
+            os.replace(p, "%s.broken-%s" % (p, stamp))
+            moved.append(name)
+    if ANDROID:
+        try:
+            AndroidKeystoreKeyProvider(os.path.join(data_dir, "dek.wrapped")).delete_alias()
+        except Exception:
+            pass  # a fresh key is made under the same alias only if this one is gone; see keys.py
+    return moved
 
 
 def build_assistant(data_dir):
@@ -32,4 +53,4 @@ def build_assistant(data_dir):
                      contacts=AndroidContactsAdapter(), phone=AndroidPhoneAdapter(),
                      photos=AndroidPhotosAdapter(), apps=AndroidAppsAdapter(), daily=AndroidDailyAdapter(),
                      messages=AndroidMessagesAdapter(), alarms=AndroidAlarmsAdapter(),
-                     device=AndroidDeviceInfoAdapter())
+                     device=AndroidDeviceInfoAdapter(), control=AndroidControlAdapter())

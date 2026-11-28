@@ -4,9 +4,9 @@ package.name = localassistant
 package.domain = org.pa
 source.dir = .
 source.include_exts = py,ttf,otf,txt
-source.exclude_dirs = tests, docs, bin, .buildozer, __pycache__, java, android_res
+source.exclude_dirs = tests, docs, bin, .buildozer, __pycache__, java, android_res, vosk_model, bin-docker
 source.exclude_patterns = p4a_hook.py
-version = 0.4.1
+version = 0.7.0
 # pycryptodome (not `cryptography`): has a python-for-android recipe and no Rust needed.
 # No version pins: use the versions python-for-android tested together.
 # (kivy==2.3.0 does NOT compile against the Python 3.14 that p4a v2026.05.09 bundles.)
@@ -20,6 +20,12 @@ android.extra_manifest_xml = ./extra_manifest.xml
 # Daily messages: Java receivers (java/) + hook that adds them to the manifest
 android.add_src = java
 android.add_resources = android_res
+# Built-in voice pack (offline speech, no download): Vosk engine + small Indian English model
+# (vosk_model/, 37 MB in the APK; copied once to the app's files folder on the first mic tap).
+# Both Apache-2.0. java/org/pa/assistant/VoskEngine.java uses them; p4a_hook.py keeps only the
+# arm64-v8a native libraries (the AARs carry 4 ABIs, ~10 MB each).
+android.add_assets = vosk_model:model-en-in
+android.gradle_dependencies = net.java.dev.jna:jna:5.18.1@aar, com.alphacephei:vosk-android:0.3.75@aar
 p4a.hook = ./p4a_hook.py
 android.api = 34
 android.minapi = 29

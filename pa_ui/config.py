@@ -20,9 +20,10 @@ TAGLINE = "Your Personal AI Assistant"
 # id -> (label, icon, handler name on the app)
 BUTTONS = {
     "calendar": ("Calendar", "calendar", "show_calendar"),
-    "tasks": ("Tasks", "list", "show_tasks"),  # to-dos, reminders, routines, daily messages
+    "tasks": ("Tasks", "list", "show_tasks"),  # to-dos, reminders, routines
+    "automations": ("Automations", "repeat", "show_automations"),  # everything that runs at a set time
     "prefs": ("Preferences", "sliders", "show_prefs"),
-    "autosend": ("WhatsApp auto-send", "send", "show_auto_send"),  # shows ON/OFF + the switch
+    "settings": ("Settings", "settings", "show_settings"),  # WhatsApp auto-send (ON/OFF + the switch) lives here
     "voice": ("Voice", "speaker", "on_voice"),
     "plus": ("Quick prompts", "plus", "show_quick"),
     "mic": ("Mic", "mic", "on_mic"),
@@ -33,7 +34,8 @@ DEFAULT_LAYOUT = dict(brand_align="center", menu_side="left", input_position="bo
                       show_tagline=True, bubbles="bubbles", btn_h=56, radius=22, font_scale=1.0, spacing=8)
 
 DEFAULT_BUTTONS = [  # (id, region) in display order
-    ("calendar", "menu"), ("tasks", "menu"), ("prefs", "menu"), ("autosend", "menu"), ("voice", "menu"),
+    ("calendar", "menu"), ("tasks", "menu"), ("automations", "menu"), ("prefs", "menu"), ("settings", "menu"),
+    ("voice", "menu"),
     ("plus", "input_left"), ("mic", "input_right"), ("send", "input_right")]
 
 # files saved before the theme picker was removed: their light theme becomes light mode

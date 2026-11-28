@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="phone_control_label">Lazey phone control</string>
+    <string name="phone_control_description">Lets Lazey do the steps you asked for in other apps (open, tap, type, search, scroll, back, read the screen). It acts only after you tap Approve on the exact list of steps, stops after 90 seconds, never types into or reads password fields, and never taps Send, Pay, Delete or similar unless you said that word. Turn it off any time here.</string>
+</resources>

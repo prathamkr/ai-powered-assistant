@@ -38,11 +38,49 @@ contact matches the name (+ optional first 3-6 digits of the number) and the req
 (SIM not found, permission missing) and says "No call was made". Calls go through
 `TelecomManager.placeCall` with the SIM's PhoneAccountHandle. Audit logs
 `not_required:user_setting_direct_call`, never names or numbers.
+Automations (Menu > Automations, since 0.7.0): everything that runs at a set time, in one list with
+Delete: daily reminders ("daily subah 9 baje mujhe padhna hai", "remind me every day at 9 am to
+study"), app automations ("har din 7 baje youtube kholo phir lofi search karo", "every monday at 10
+am open linkedin", "roz 9 baje rahul ko instagram pe good morning bhejo", "weekdays 8 am what is the
+plan for today"), daily SMS / WhatsApp messages and timed routines. They are said in the chat; the
+screen lists them and has examples. Reminders and SMS run by themselves (alarm + notification / SMS,
+also after a reboot). App automations are approved ONCE (the card shows the steps and the time,
+`pa/adapters/automation.py`); at the time a notification "Automation: ... - tap to run" opens Lazey,
+which runs exactly the approved steps (Android does not let an app open other apps from the
+background, and phone control needs the screen unlocked, so one tap starts it). A plain command
+(open an app, battery, day plan) runs as if typed, with its own checks. Records are encrypted like
+the daily messages; lost alarms (force-stop) are set again when the app starts.
+
+Reply language (`pa/lang.py`, since 0.6.0): a task given in English gets an English reply, a task in
+Hinglish gets a Hinglish reply. The task's language comes from its words ("karo", "hai", "kya", "ko",
+"pe"... = Hinglish; "what", "open", "send", "the"... = English); the message / note text inside a task
+does not count, and an answer with no language of its own ("yes", "2", "5 pm", "whatsapp", a name)
+keeps the conversation's language. Every reply is written once in the code; `PAIRS` holds its
+English and Hinglish versions with {0}, {1}... for names and numbers, and `localize()` swaps whole
+lines or sentences. Quoted text (the message that will be sent, a name) is never changed, so an
+approval card always shows exactly what will happen. Settings screens stay in English.
+Tested in `ReplyLanguage`: 31 tasks in both languages, no reply line in the other language.
+
 Voice (ported from the `add-pocketmind-voice` branch, its "Android fallback" path, in Python):
-**Mic** listens with the phone's own `SpeechRecognizer` (en-IN, so Hinglish comes out in Latin
+**Built-in voice pack (default, since 0.5.0):** the APK carries its own offline speech engine,
+Vosk (`com.alphacephei:vosk-android`, Apache-2.0) with the small Indian English model
+`vosk-model-small-en-in-0.4` (Apache-2.0, folder `vosk_model/`, fetched by
+`docker/get-voice-model.sh`, packed as `assets/model-en-in`). Installing the APK installs the voice
+pack: no download, no internet, any phone. On the first mic tap the model is copied once to the
+app's files folder (~57 MB, again only when the model changes) and loaded
+(`java/org/pa/assistant/VoskEngine.java`); a turn ends by itself after the first sentence, after
+~5 s of silence, after 15 s, or when the mic is tapped again. The model knows English words
+(Indian accent) but has no Hindi words and no app names like WhatsApp/LinkedIn in its vocabulary,
+so it writes look-alikes ("battery kidney", "open what's up", "youtube galore"); `pa/voice_fix.py`
+turns the common ones back, for this engine's text only. Measured on 24 commands x 3 Indian English
+voices (macOS `say` Rishi/Aman/Tara, 2026-11-28): the right command 48/72 without the fixes, 58/72
+with them; Hindi-only sentences ("kal paanch baje yaad dilana") are not understood. APK size grows
+by ~40 MB; the first mic tap copies the model to the phone (~57 MB, Android/data/<app>/files).
+**Voice > Phone speech** switches back to the phone's recognizer described below.
+**Mic** (Phone speech) listens with the phone's own `SpeechRecognizer` (en-IN, so Hinglish comes out in Latin
 letters), then sends the text like a typed message. Replies are read with the phone's
 `TextToSpeech`, sentence by sentence. **Voice** button: speak replies (after voice / always / off),
-Nova/Atlas/Echo/Luna/Spark presets, pitch, speed. **Offline only** (default on): only the
+Nova/Atlas/Echo/Luna/Spark presets, pitch, speed. **Offline only** (always; the "Allow online" choice was removed): only the
 on-device recognizer (`createOnDeviceSpeechRecognizer`, Android 13+) is used, so audio never
 leaves the phone. Voice settings show which offline packs are installed
 (`checkRecognitionSupport`) and can download one (`triggerModelDownload`, internet once).
@@ -119,6 +157,10 @@ restricted settings" (on the test phone done with `appops set ... ACCESS_RESTRIC
 after that it stayed on across an update. The app also remembers that auto-send was on and, if it
 finds it off on start, says so and shows a "Turn on auto-send" button. SMS goes from the chosen SIM after
 the approval card (an SMS cannot be taken back). No channel given -> the app asks SMS or WhatsApp.
+Phone control types a message by pasting it (`PhoneControlService.java`): the clip is marked
+sensitive (keyboards do not show or keep it, Android 13+) and the clipboard is cleared right after
+the paste (checked on a Samsung A35, 2026-11-28: before the fix the keyboard offered the sent text).
+App names are matched as people type them: "linkedln" (L for i), "linkdin", "linkden" all mean LinkedIn.
 Unit-tested; on the phone the SMS permission prompt appeared, nothing was sent during testing.
 Daily messages: `har subah 8 baje mummy ko good morning message karo`, `every night at 10 send
 "good night" to papa on whatsapp`, `roz shaam 6 baje papa ko sms karo ki main nikal gaya`.
@@ -198,6 +240,18 @@ Desktop has no Android Keystore, so you must opt in to an **insecure** dev key:
     python main.py
 
 Calendar actions report "not available" on desktop (correct behaviour).
+
+## Build APK (Docker, any machine)
+Same tool versions everywhere (Ubuntu 24.04, JDK 17, buildozer 1.6.0; NDK r28c and API 34 via
+buildozer.spec). Needs Docker (or nerdctl); on Apple Silicon the x86_64 image runs through Rosetta.
+
+    docker/build.sh                 # -> bin-docker/*.apk
+    DEV=1 docker/build.sh           # "Lazey Dev" (org.pa.localassistantdev), installs next to Lazey
+    ENGINE=nerdctl docker/build.sh  # containerd instead of Docker
+
+The first build takes about an hour (SDK/NDK download, Python/Kivy compile); the volumes `lazey-sdk`
+and `lazey-work` keep that, so later builds take minutes. This makes builds reproducible; it does
+not test the app on different phones.
 
 ## Build APK (WSL2 Ubuntu)
     sudo apt install -y python3-venv git zip unzip openjdk-17-jdk build-essential \

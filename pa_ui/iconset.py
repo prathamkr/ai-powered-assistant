@@ -19,6 +19,9 @@ GLYPHS = {
     "bell": "",       # notifications
     "plus": "",       # add
     "check": "",      # check
+    "done_all": "\ue877",   # done_all (double tick on sent messages)
+    "settings": "\ue8b8",   # settings (gear)
+    "repeat": "\ueb7b",     # event_repeat (Automations)
     "search": "",     # search
     "phone": "",      # smartphone
     "camera": "",     # photo_camera

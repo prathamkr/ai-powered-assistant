@@ -4,15 +4,17 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from . import config, everyday
+from . import config, control, everyday, messaging
 
 ALLOWED = {"remember_preference", "add_note", "query_notes", "schedule_work",
            "call_contact", "find_photos", "open_app", "schedule_message", "send_message",
            "set_alarm", "set_timer", "show_alarms",
            "device_info", "add_todo", "list_todos", "done_todo", "plan_day",
            "create_routine", "run_routine", "list_routines", "delete_routine",
-           "schedule_routine", "unschedule_routine", "auto_send",
-           "change_setting", "unknown"}
+           "schedule_routine", "unschedule_routine", "auto_send", "schedule_notice", "schedule_task",
+           "list_automations",
+           "change_setting", "smalltalk", "phone_control",
+           "save_handle", "list_handles", "delete_handle", "messaging_help", "unknown"}
 UNSUPPORTED = {"change_setting"}
 PHOTO_RANGES = {"today", "yesterday", "week", "month"}
 # call_contact is NOT here: the user chose immediate calls when exactly one contact matches
@@ -29,6 +31,9 @@ FIELDS = {
     "open_app": {"app"},
     "schedule_message": {"name", "number", "prefix", "text", "time", "channel", "repeat", "days"},
     "schedule_routine": {"name", "time", "days"},
+    "schedule_notice": {"text", "time", "days"},      # every day / some weekdays: a reminder notification
+    "schedule_task": {"command", "time", "days"},     # every day / some weekdays: run a command (tap to run)
+    "list_automations": set(),
     "unschedule_routine": {"name"},
     "send_message": {"name", "number", "prefix", "text", "channel", "sim", "name_text"},
     "set_alarm": {"time", "days", "label"},
@@ -40,6 +45,12 @@ FIELDS = {
     "run_routine": {"name"},
     "delete_routine": {"name"},
     "set_timer": {"seconds", "label"},
+    "smalltalk": {"kind"},
+    "phone_control": {"ui_steps"},
+    "save_handle": {"name", "app", "handle"},
+    "list_handles": set(),
+    "delete_handle": {"name", "app"},
+    "messaging_help": {"msg_app"},
 }
 CALL_FILLERS = set("ko to please plz karo kar do de dena lagao laga call dial phone fone ek zara jara "
                    "kardo krdo mujhe se baat karni hai karwa karwao make a the abhi sim wale wali wala "
@@ -48,7 +59,10 @@ CALL_FILLERS = set("ko to please plz karo kar do de dena lagao laga call dial ph
                    # English glue words ("call neha whose number starts with 7012 from sim 1")
                    "whose who which that his her their its starts started starting begins begin "
                    "beginning with digits digit and for me my can could you u pls kindly on in is "
-                   "ka ki ke hai h hota hoti wo woh uska uski unka unki".split())
+                   "ka ki ke hai h hota hoti wo woh uska uski unka unki "
+                   # "i want to talk to mummy", "mummy se baat karni hai", "ring mom", "give a call to papa"
+                   "i back give gimme ring fon kol talk speak baat karna karni karun karu krni krna chahta chahti "
+                   "chahiye chahta hu hun hoon want wanna would like need with get connect put id im".split())
 # "whose number starts with 7012", "number starting 7012", "jiska number 7012 se shuru hota hai"
 PREFIX_PHRASE = re.compile(
     r"\b(?:(?:whose|jiska|jiske|jinka|uska|unka)\s+)?(?:(?:phone|mobile)\s+)?(?:number|no\.?|num)?\s*(?:is\s+)?"
@@ -192,7 +206,7 @@ _TIME_PATS = (
     r"\b(?:%s)\s+(?:ke\s+|ko\s+|at\s+)?(\d{1,2})()()\b(?!\s*\d)" % _PART_WORDS,
     r"\bat\s+(\d{1,2})()()\b(?!\s*\d)",
 )
-MSG_FILLERS = set("send bhejo bhej bhejna do karo kar kardo message msg please plz a the wish to ko "
+MSG_FILLERS = set("send bhejo bhej bhejna do karo kar kardo message msg dm please plz a the wish to ko "
                   "saying say that ki ke ka wala text in at pe".split())
 
 
@@ -265,14 +279,32 @@ def _msg_quote_channel(s, ent):
         s = s[:q.start()] + " " + s[q.end():]
     # speech recognizers write WhatsApp in many ways: "whatsapp", "what's app", "whats app", "watsapp"
     wa = r"(?:what'?s\s?app|wh?ats?app|whatsap)"
+    # Truecaller's messages are SMS: "rahul ko truecaller se sms karo hi" = an SMS
+    if re.search(r"\btrue\s?caller\b", s, re.I):
+        ent["channel"] = "sms"
+        s = re.sub(r"\b(?:on|via|by|through|pe|par|se|me|mein|in)?\s*true\s?caller(?:\s+(?:pe|par|se|me|mein|on))?\b",
+                   " ", s, count=1, flags=re.I)
+    soc = re.search(r"\b(%s)\b" % control.SOCIAL_WORDS, s, re.I)
     if re.search(r"\b%s\b" % wa, s, re.I):
         ent["channel"] = "whatsapp"
-    elif re.search(r"\b(sms|text)\b", s, re.I):
+    elif re.search(r"\b(?:g\s?mail|e-?mail|mail)\b", s, re.I) and not soc:
+        # "rahul ko mail karo ki ...", "send an email to rahul saying hi", "email rahul hi"
+        ent["channel"] = "email"
+        # only the FIRST mention is the channel: "rahul ko mail karo ki email check karo" keeps the second
+        s = re.sub(r"\b(?:on|via|by|through|pe|par|se|me|mein|in)?\s*(?:an?\s+)?(?:g\s?mail|e-?mail|mail)"
+                   r"(?:\s+(?:pe|par|se|me|mein|on))?\b", " ", s, count=1, flags=re.I)
+    elif soc:
+        # "rahul ko instagram pe hi bhejo", "send hi to rahul on snapchat", "insta rahul hi"
+        ent["channel"] = control.social_app(soc.group(1))
+        s = re.sub(r"^\s*(?:please\s+)?open\s+(?:%s)\s+(?:and|aur|then)\s+" % control.SOCIAL_WORDS, " ", s, flags=re.I)
+        s = re.sub(r"\b(?:on|via|by|through|pe|par|se|me|mein|in)?\s*(?:%s)(?:\s+(?:pe|par|se|me|mein|on))?\b"
+                   % control.SOCIAL_WORDS, " ", s, count=1, flags=re.I)   # first mention only
+    elif ent.get("channel") != "sms" and re.search(r"\b(sms|text)\b", s, re.I):
         ent["channel"] = "sms"
     s = re.sub(r"^\s*(?:please\s+)?open\s+%s\s+(?:and|aur|then)\s+" % wa, " ", s, flags=re.I)
     s = re.sub(r"\b(?:on|via|by|through|pe|par|se|me|mein|in)?\s*(?:%s|sms|text\s+message)"
                r"(?:\s+(?:pe|par|se|me|mein|on))?\b" % wa, " ", s, flags=re.I)
-    return re.sub(r"^\s*text\b", " ", s, flags=re.I)
+    return re.sub(r"^\s*text\b", " message", s, flags=re.I)  # "text mummy hi" = "message mummy hi"
 
 
 def _parse_daily(t):
@@ -294,17 +326,93 @@ def _parse_daily(t):
     return ent
 
 
+# ---------- automations: "daily subah 9 baje mujhe padhna hai", "har din 7 baje youtube kholo phir ..." ----------
+_REMIND_WORDS = re.compile(r"\b(remind|reminder|reminders|yaad\s+(?:dila|dilana|dilaana|dilao|dila\s*do|dila\s*dena|"
+                           r"karwa|karwana|karwa\s*do)|notification|notify|alert)\b", re.I)
+_MSG_LIKE = re.compile(r"\b(message|msg|sms|text|bhejo|bhej|bhejna|send|wish|dm|mail|email)\b", re.I)
+_AUTO_LIST = re.compile(r"(?:(?:show|list|see|open)\s+(?:me\s+)?(?:all\s+)?(?:my\s+)?|(?:meri|mere|saare|sare|sab|sabhi)\s+)?"
+                        r"automations?(?:\s+(?:dikhao|dikha\s*do|batao|list\s+karo|kya\s+hain|kaun\s+kaun\s+si\s+hain|"
+                        r"kholo|please))?", re.I)
+
+
+def _notice_text(s):
+    """'mujhe padhna hai' / 'remind me to study' / 'padhai ka reminder do' -> the reminder's text."""
+    s = re.sub(r"\s+", " ", s)
+    for pat in (r"\b(?:please|plz)\b",
+                r"\bremind\s+me\s*(?:to|that|about|of)?\b",
+                r"\b(?:ka|ki|ke)?\s*reminders?\s*(?:do|de\s*do|dedo|dena|lagao|laga\s*do|set\s*karo|set|chahiye|bhejo|send)?\b",
+                r"\byaad\s+(?:dilana|dilaana|dilao|dila\s*do|dila\s*dena|dila|karwana|karwa\s*do|karwa)\b\s*(?:ki|ke|that)?",
+                r"\b(?:notification|alert)\s*(?:do|de\s*do|dedo|bhejo|chahiye|send\s*karo)?\b",
+                r"\bnotify\s+me\s*(?:to|about|of|that)?\b",
+                r"^\s*(?:mujhe|me|i\s+want\s+a)\b"):
+        s = re.sub(pat, " ", s, flags=re.I)
+    s = re.sub(r"\s+", " ", s).strip(" ,.:;-")
+    s = re.sub(r"^(?:ki|ke|to|that|at|pe|ko)\s+|\s+(?:ki|ke|to|at|pe|ko)$", "", s, flags=re.I).strip(" ,.:;-")
+    return s or None
+
+
+def _parse_automation(t, low, parse_command, today):
+    """Something to do again and again at a time: a reminder notification ('schedule_notice') or a
+    command to run ('schedule_task'). Alarms, routines and daily messages have their own parsers."""
+    if _AUTO_LIST.fullmatch(low.strip(" .!?")):
+        return {"intent": "list_automations", "entities": {}}
+    repeats = DAILY_RE.search(low) or (weekday_days(low) and re.search(r"\d", low))
+    if not repeats or DAILY_NOT_DAILY.search(low) or re.search(r"\b(alarm|routine|timer)\b", low):
+        return None
+    if _MSG_LIKE.search(low) and not _REMIND_WORDS.search(low):
+        return None                     # a daily message: _parse_daily
+    ent = {}
+    days = weekday_days(low)
+    if days:
+        ent["days"] = days
+    rest = re.sub(_WEEKDAY_WORDS, " ", t, flags=re.I)
+    tm, rest = _daily_time(rest)
+    rest = re.sub(r"\b(?:har\s+roz|har\s+din|har|roz|rozana|daily|every\s*day|everyday|each\s+day|every|din|"
+                  r"subah|shaam|sham|raat|dopahar|morning|evening|night|afternoon)\b", " ", rest, flags=re.I)
+    rest = re.sub(r"\s+", " ", rest).strip(" ,.:;-")
+    rest = re.sub(r"^(?:at|on|ko|ke|ki|pe|in\s+the|then|phir)\s+|\s+(?:at|ko|pe|in\s+the)$", "", rest, flags=re.I).strip()
+    if tm:
+        ent["time"] = tm
+    if _REMIND_WORDS.search(low):
+        ent["text"] = _notice_text(rest)
+        return {"intent": "schedule_notice", "entities": {k: v for k, v in ent.items() if v}}
+    if not tm:
+        return None                     # no time and no "remind": not an automation
+    command = re.sub(r"^\s*mujhe\s+", "", rest, flags=re.I).strip()
+    sub = parse_command(command, today)["intent"] if command else "unknown"
+    if sub in ("send_message", "schedule_message", "call_contact"):
+        return None                     # "mummy ko roz 7 baje whatsapp karna hai ki ...": a daily message
+    if sub in TASK_INTENTS:
+        ent["command"] = command
+        return {"intent": "schedule_task", "entities": ent}
+    ent["text"] = _notice_text(rest)    # "daily 9 baje mujhe padhna hai": a reminder
+    return {"intent": "schedule_notice", "entities": {k: v for k, v in ent.items() if v}} if ent.get("text") else None
+
+
+# commands that can run from an automation's notification
+TASK_INTENTS = ("phone_control", "open_app", "device_info", "plan_day", "list_todos", "briefing", "query_notes")
+
+
 def _parse_send(t):
     """A one-off message now: 'send neha a message hi', 'neha ko hi message karo',
     'open whatsapp and send neha a message hi', 'send neha a message from airtel hi'.
     None unless both the text and the person are found (then other intents get a chance)."""
-    if not re.search(r"\b(send|bhejo|bhej|message|msg|sms|text|whats\s?app)\b", t, re.I):
+    if not (re.search(r"\b(send|bhejo|bhej|message|msg|sms|text|whats\s?app|dm|e-?mail|g\s?mail|mail)\b", t, re.I)
+            or re.match(r"^\s*(?:%s)\s+\S+\s+\S" % control.SOCIAL_WORDS, t, re.I)  # "insta rahul hi"
+            or re.search(r"\bko\s+(?:%s)\s+(?:karo|kar\s*do|kardo)\b" % control.SOCIAL_WORDS, t, re.I)
+            # "rahul ko instagram pe bolo ki ...", "papa ko whatsapp pe batao ki ..."
+            or (re.search(r"\b(?:%s|what'?s\s?app|wh?ats?app|e-?mail|g\s?mail|mail)\b" % control.SOCIAL_WORDS, t, re.I)
+                and re.search(r"\bko\b.*\b(?:bol|bolo|kaho|keh|bata|batao|likho|likh)\b", t, re.I))
+            or re.search(r"^\s*(?:please\s+|plz\s+)?(?:tell|inform)\s+(?!me\b)", t, re.I)
+            or re.search(r"\bko\s+(?:bol|bolo|kaho|keh|bata|batao|likho|likh)\b", t, re.I)):
         return None
-    if re.search(r"\b(call|dial)\b", t, re.I) and not re.search(r"\b(send|bhejo|bhej|message|msg|sms|text)\b", t, re.I):
+    said = re.search(r"\bko\s+(?:bol|bolo|kaho|keh|bata|batao|likho|likh)\b|^\s*(?:tell|inform)\b", t, re.I)
+    if (re.search(r"\b(call|dial)\b", t, re.I) and not said
+            and not re.search(r"\b(send|bhejo|bhej|message|msg|sms|text)\b", t, re.I)):
         return None  # "neha ko whatsapp pe call karo" is a WhatsApp CALL, not a message saying "call"
     ent = {}
     s = _msg_quote_channel(t, ent)
-    if re.match(r"^\s*(?:what'?s\s?app|wh?ats?app|whatsap|sms)\b", t, re.I) and not re.match(
+    if re.match(r"^\s*(?:what'?s\s?app|wh?ats?app|whatsap|sms|e-?mail|g\s?mail|mail|%s)\b" % control.SOCIAL_WORDS, t, re.I) and not re.match(
             r"^\s*(?:send|message|msg|text)\b", s, re.I):
         s = "message " + s  # "whatsapp aman hi": the channel word is the verb
     sim, s = _take_sim(s)
@@ -338,7 +446,7 @@ def _english_msg(s):
       send a message saying hi to x     | send aman a message hi| send a message to aman saying hi
       message rahul saying I'm late     | neha 2 saying good morning | send a message to aman hi"""
     s = re.sub(r"^(?:(?:please|plz|can you|could you|kindly)\s+)+", "", s.strip(" ,.!"), flags=re.I)
-    m = re.match(r"^(?:send|message|msg|text|wish|write)\b\s*(?P<rest>.*)$", s, re.I)
+    m = re.match(r"^(?:send|message|msg|text|wish|write|tell|inform|dm)\b\s*(?P<rest>.*)$", s, re.I)
     rest = m.group("rest") if m else s
     rest = re.sub(r"^(?:a|an|the|this)\s+", "", rest, flags=re.I)
     if not rest:
@@ -382,9 +490,15 @@ def _msg_text_and_who(s, ent):
         name = text = None
         for pat in (
             # papa ko karo ki main nikal gaya
-            r"^(?P<name>.+?)\s+ko\s+(?:karo|kar\s*do|kardo|bhejo|bhej\s*do)\s+(?:ki|ke|that)\s+(?P<text>.+)$",
+            r"^(?P<name>.+?)\s+ko\s+(?:(?:text|msg|message|sms|dm)\s+)?(?:karo|kar\s*do|kardo|bhejo|bhej\s*do|"
+            r"karna\s+hai|bhejna\s+hai)\s+(?:(?:ki|ke|that)\s+)?(?P<text>.+)$",
+            # (rahul ko) daily 4 baje sms karna hai ki good morning: the time words took the "ko"
+            r"^(?P<name>.+?)\s+(?:karna|bhejna)\s+hai\s+(?:ki|ke|that)\s+(?P<text>.+)$",
+            # rahul ko bol do main aa raha hu / papa ko batao ki main pahunch gaya / neha ko likho hi
+            r"^(?P<name>.+?)\s+ko\s+(?:bol\s*do|bol\s*dena|bolo|bol|kaho|keh\s*do|keh\s*dena|bata\s*do|"
+            r"bata\s*dena|batao|bata|likho|likh\s*do|likh\s*dena|likh)\s+(?:(?:ki|ke|that)\s+)?(?P<text>.+)$",
             # mummy ko good morning (message) karo / bhejo
-            r"^(?P<name>.+?)\s+ko\s+(?P<text>.+?)\s*(?:(?:ka|ki|wala|wali)\s+)?(?:message|msg|wish)?\s*"
+            r"^(?P<name>.+?)\s+ko\s+(?P<text>.+?)\s*(?:(?:ka|ki|wala|wali)\s+)?(?:message|msg|wish|dm)?\s*"
             r"(?:karo|kar\s*do|kardo|bhejo|bhej\s*do|bhejna|send\s*karo|send\s*kar\s*do|send|karna)?"
             r"\s*(?:please|plz)?$",
         ):
@@ -412,17 +526,30 @@ def _msg_text_and_who(s, ent):
 
 
 # "open whatsapp", "launch the youtube app", "whatsapp kholo", "camera open karo", "insta chalao"
-OPEN_PRE = re.compile(r"^(?:please\s+|plz\s+|can you\s+|zara\s+)?(?:open|launch|start|run)\s+(?:up\s+)?(.+?)"
+OPEN_PRE = re.compile(r"^(?:please\s+|plz\s+|can you\s+|could you\s+|zara\s+|i want to\s+|i wanna\s+|let'?s\s+)*"
+                      r"(?:open|launch|start|run)\s+(?:up\s+)?(.+?)"
                       r"(?:\s+(?:please|plz|for me|now))?[.!]?$")
-OPEN_POST = re.compile(r"^(?:mera\s+|meri\s+|my\s+)?(.+?)\s+(?:app\s+)?(?:kholo|khol\s*do|kholdo|khol|"
+OPEN_POST = re.compile(r"^(?:mujhe\s+|mera\s+|meri\s+|my\s+)?(.+?)\s+(?:app\s+)?(?:kholo|khol\s*do|kholdo|khol|"
+                       r"kholna\s+hai|kholni\s+hai|kholna\s+h|chalana\s+hai|chalani\s+hai|"
                        r"open\s*(?:karo|kar\s*do|kardo|kar)?|chalao|chala\s*do|start\s*(?:karo|kar\s*do)?|"
                        r"launch\s*(?:karo|kar\s*do)?)(?:\s+(?:please|plz|na|do|jaldi))?[.!]?$")
+# "go to instagram", "take me to maps": only for well-known apps, so "I want to go to market" stays unknown
+OPEN_GO = re.compile(r"^(?:please\s+|plz\s+|can you\s+|could you\s+|i want to\s+|i wanna\s+|let'?s\s+)*"
+                     r"(?:go to|take me to|switch to|jump to)\s+(?:the\s+|my\s+)?(whatsapp|whats app|youtube|instagram|insta|"
+                     r"facebook|fb|maps|google maps|chrome|camera|gallery|settings|calculator|play store|spotify|gmail|"
+                     r"telegram|snapchat|twitter|netflix|paytm|phonepe|gpay|google pay|clock|contacts|calendar|messages|"
+                     r"photos|files|notes|browser|dialer)(?:\s+app)?[.!]?$")
 APP_NAME_SKIP = {"the", "my", "mera", "meri", "app", "application", "wala", "wali"}
 
 
 def _parse_open(low):
     """App name for an 'open X' command, or None. Kept strict so that 'kal ki photos kholo'
     stays a photo search and 'open 45 minutes...' never becomes an app."""
+    if re.fullmatch(r"(?:please\s+)?(?:camera|cam)\s+on\s*(?:karo|kar\s*do|kardo)", low.strip(" .!")):
+        return "camera"  # the only "X on karo" that means an app (wifi / torch on karo are settings)
+    g = OPEN_GO.match(low.strip())
+    if g:
+        return g.group(1)
     m = OPEN_PRE.match(low) or OPEN_POST.match(low)
     if not m:
         return None
@@ -435,6 +562,9 @@ def _parse_open(low):
     return " ".join(words)
 
 
+# other ways to ask for a call: "ring mom", "papa ko fon lagao", "rahul se baat karni hai", "talk to mummy"
+CALLISH_RE = re.compile(r"\b(?:ring|fon|kol|baat\s+(?:kar\w*|krni|krna|karwa\w*)|talk\s+to|speak\s+(?:to|with))\b")
+SETTING_RE = re.compile(r"\b(wifi|wi-fi|bluetooth|brightness|volume|airplane|torch)\b")
 PHOTO_WORDS = r"photos?|pics?|pictures?|tasveer|tasvir|images?|gallery|screenshots?"
 PHOTO_SKIP = set("ki ke wali wale of mere meri my aaj kal today yesterday pichle pichhle last is this "
                  "hafte week mahine month sab all saari saare dikhao dikha show find dhundo dhoondo "
@@ -493,12 +623,41 @@ class ConstrainedParser(InferenceBackend):
     def parse(self, text, today):
         t = text.strip()
         low = t.lower()
-        m = re.match(r"^(?:yaad rakho|yad rakho|remember(?: that)?)[\s,:\-]*(.+)$", low, re.S)
+        kind = smalltalk_kind(low)
+        if kind:
+            return {"intent": "smalltalk", "entities": {"kind": kind}}
+        # "hello lazey, call mummy" / "ok open whatsapp": drop the greeting, keep the command
+        lead = re.match(r"^(?:(?:hi+|hello+|hey+|ok(?:ay)?|acha|accha|lazey|lazy)[\s,!.]+)+(?=\S)", t, re.I)
+        if lead:
+            t = t[lead.end():]
+            low = t.lower()
+        handle = parse_handle(low)
+        if handle is not None:
+            return handle
+        how = parse_messaging_help(low)
+        if how is not None:
+            return how
+        m = re.match(r"^(?:mujhe\s+)?(?:yaad rakho|yad rakho|yaad rakhna|yad rakhna|remember(?: that)?)[\s,:\-]*"
+                     r"(?:ki\s+|ke\s+)?(.+)$", low, re.S)
         if m:
             return {"intent": "remember_preference", "entities": {"text": t[m.start(1):]}}
-        m = re.match(r"^note\s*(?:karo|kar do|kardo|this)?\s*[:\-]\s*(.+)$", low, re.S)
+        m = re.match(r"^note\s*(?:karo|kar do|kardo|kar lo|karlo|this|this down|down)?\s*[:\-]\s*(.+)$", low, re.S) or \
+            re.match(r"^(?:ye\s+|yeh\s+|isko\s+|ise\s+)?note\s+(?:karo|kar do|kardo|kar lo|karlo|this down|this|down)\s*"
+                     r"(?:ki\s+|ke\s+)?(.+)$", low, re.S) or \
+            re.match(r"^(?:please\s+|plz\s+)?(?:make|take|add|write|create|save|jot|put)\s+(?:a\s+|down\s+|this\s+)?"
+                     r"(?:quick\s+)?note(?:\s+(?:of|that|about))?[\s:,\-]*(.+)$", low, re.S) or \
+            re.match(r"^(?:mera\s+|meri\s+|ek\s+|ye\s+|yeh\s+)?note\s+(?:save\s+karo|save\s+kar\s*do|likho|likh\s*do|"
+                     r"likh\s*lo|add\s+karo|bana\s+do|banao)\s*[:\-]?\s*(?:ki\s+|ke\s+|that\s+)?(.+)$", low, re.S)
         if m:
             return {"intent": "add_note", "entities": {"text": t[m.start(1):]}}
+        # automations: "daily subah 9 baje mujhe padhna hai", "har din 7 baje youtube kholo phir lofi search karo"
+        auto = _parse_automation(t, low, self.parse, today)
+        if auto is not None:
+            return auto
+        # phone control: "youtube kholo phir lofi search karo", "rahul pe click karo", "back jao"
+        ctl = control.parse_control(t, _parse_open, PHOTO_WORDS)
+        if ctl is not None:
+            return {"intent": "phone_control", "entities": {"ui_steps": ctl["steps"]}}
         # "auto send on karo", "turn on auto-send", "autosend chalu", "is auto send on?"
         if re.search(r"\bauto[\s\-]?send\b", low):
             return {"intent": "auto_send", "entities": {}}
@@ -546,7 +705,9 @@ class ConstrainedParser(InferenceBackend):
         app = _parse_open(low)
         if app:
             return {"intent": "open_app", "entities": {"app": app}}
-        if re.search(r"\b(call|dial|phone|fone)\b", low) and not re.search(r"\b(%s)\b" % PHOTO_WORDS, low):
+        if (re.search(r"\b(call|dial|phone|fone)\b", low)
+                or (CALLISH_RE.search(low) and not SETTING_RE.search(low))) \
+                and not re.search(r"\b(%s)\b" % PHOTO_WORDS, low):
             # "call neha on whatsapp", "neha ko whatsapp pe call karo", "whatsapp video call neha"
             wa = re.search(r"\b(what'?s\s?app|wh?ats?app|whatsap)\b", low)
             video = bool(re.search(r"\bvideo\b", low))
@@ -589,9 +750,123 @@ class ConstrainedParser(InferenceBackend):
             ent = {}
             _msg_quote_channel(t, ent)
             return {"intent": "send_message", "entities": {k: v for k, v in ent.items() if k == "channel"}}
-        if re.search(r"\b(wifi|wi-fi|bluetooth|brightness|volume|airplane|torch)\b", low):
+        if SETTING_RE.search(low):
             return {"intent": "change_setting", "entities": {}}
         return {"intent": "unknown", "entities": {}}
+
+
+_HANDLE_WORD = r"(?:username|user\s*name|user\s*id|id|handle|account)"
+_OF = r"(?:'s|\s+ka|\s+ki|\s+ke)"
+
+
+_EMAIL_WORDS = r"(?:e-?mail|g\s?mail|mail)(?:\s+(?:id|address|account))?"
+# a QUESTION about how to message: "kaise", or "how do / can / to / should ..." (not "hi how are you" inside a message)
+_HOW = re.compile(r"\b(kaise|kese|kaisey)\b|\bhow\s+(?:do|does|can|could|should|to|will|would)\b")
+_MSG_WORDS = re.compile(r"\b(message|msg|messages|bhej\w*|send|mail|email|dm|text|use|chat|baat|kar\s+sakt\w*|"
+                        r"karu|karun|karte|karna)\b")
+
+
+def parse_messaging_help(low):
+    """'instagram pe message kaise bheju?', 'how do I send a whatsapp message', 'kaun kaun se apps se
+    message kar sakte ho' -> messaging_help (msg_app None = all apps)."""
+    s = re.sub(r"\s+", " ", low.strip(" .!?"))
+    if re.search(r"\b(kaun kaun|kon kon|kaun se|kon se|which|what)\b.*\bapps?\b.*\b(message|msg|mail|chat|bhej\w*|send)",
+                 s) or re.fullmatch(r"(?:messaging|message) apps?(?: dikhao| batao| list)?", s):
+        return {"intent": "messaging_help", "entities": {}}
+    if not (_HOW.search(s) and _MSG_WORDS.search(s)) or re.match(r"(?:please\s+)?(?:send|message|msg|text|dm|email|tell)\b", s):
+        return None
+    for app_id in ("messenger", "whatsapp", "instagram", "snapchat", "gmail", "sms", "facebook", "telegram", "signal",
+                   "linkedin", "discord", "x", "teams", "slack", "google_chat", "truecaller"):
+        if re.search(r"\b(?:%s)\b" % messaging.WORDS[app_id], s):
+            return {"intent": "messaging_help", "entities": {"msg_app": app_id}}
+    return None
+
+
+def parse_handle(low):
+    """Saved usernames for Instagram / Messenger / Snapchat:
+    'rahul ka instagram username rahul_23 hai', "save rahul's snapchat as rahul.snap",
+    'usernames dikhao', 'rahul ka instagram username hatao'."""
+    s = re.sub(r"\s+", " ", low.strip(" .!?"))
+    apps = control.HANDLE_WORDS
+    # Discord: the name as shown in the DMs, may have spaces ("rahul ka discord Rahul King hai")
+    d = re.fullmatch(r"(?:save\s+|set\s+)?(?P<name>[a-z][\w .]*?)%s\s+discord(?:\s+(?:name|naam|username|id))?\s*"
+                     r"(?:is|as|=|:|to)?\s+(?P<h>[^()]{1,32}?)(?:\s+(?:hai|h|he))?" % _OF, s)
+    if d and not re.fullmatch(r"(?:hatao|hata do|delete.*|remove.*|kholo|open)", d.group("h")):
+        return {"intent": "save_handle", "entities": {"name": d.group("name").strip(), "app": "discord",
+                                                       "handle": d.group("h").strip()}}
+    if re.fullmatch(r"(?:(?:mere|meri|my|saved|sab|all|show|list)\s+)*(?:social\s+)?(?:usernames?|handles?)"
+                    r"(?:\s+(?:dikhao|batao|list|show|kya hai|kya hain))?", s):
+        return {"intent": "list_handles", "entities": {}}
+    m = (re.fullmatch(r"(?P<name>[a-z][\w .]*?)%s\s+(?P<app>%s)\s+%s\s+(?:hatao|hata do|delete(?: karo| kar do)?|"
+                      r"remove(?: karo)?|mita do|bhool jao)" % (_OF, apps, _HANDLE_WORD), s)
+         or re.fullmatch(r"(?:delete|remove|forget)\s+(?P<name>[a-z][\w .]*?)%s\s+(?P<app>%s)(?:\s+%s)?"
+                         % (_OF, apps, _HANDLE_WORD), s))
+    if m:
+        return {"intent": "delete_handle", "entities": {"name": m.group("name").strip(),
+                                                         "app": control.social_app(m.group("app"))}}
+    m = (re.fullmatch(r"(?:save\s+)?(?P<name>[a-z][\w .]*?)%s\s+(?P<app>%s)\s+%s\s*(?:is|as|hai|=|:|-)?\s*"
+                      r"@?(?P<h>[a-z0-9._+@-]{1,120})(?:\s+(?:hai|h|he))?" % (_OF, apps, _HANDLE_WORD), s)
+         or re.fullmatch(r"(?:save\s+)?(?P<name>[a-z][\w .]*?)%s\s+(?P<app>%s)\s+(?:is|as|=|:)\s*@?(?P<h>[a-z0-9._+@-]{1,120})"
+                         % (_OF, apps), s))
+    if not m:   # email address: "rahul ka email rahul@gmail.com hai", "save rahul's email as x@y.com"
+        e = re.fullmatch(r"(?:save\s+|set\s+)?(?P<name>[a-z][\w .]*?)%s\s+%s\s*(?:is|as|hai|=|:|-|to)?\s*"
+                         r"(?P<h>%s)(?:\s+(?:hai|h|he))?" % (_OF, _EMAIL_WORDS, messaging.EMAIL_RE), s)
+        if not e:   # looks like an email but is not a valid one ("rahul@gmail"): the assistant says so
+            e = re.fullmatch(r"(?:save\s+|set\s+)?(?P<name>[a-z][\w .]*?)%s\s+%s\s*(?:is|as|hai|=|:|-|to)?\s*"
+                             r"(?P<h>[^\s@]*@\S*)(?:\s+(?:hai|h|he))?" % (_OF, _EMAIL_WORDS), s)
+        if e:
+            return {"intent": "save_handle", "entities": {"name": e.group("name").strip(), "app": "gmail",
+                                                           "handle": e.group("h")}}
+        e = re.fullmatch(r"(?P<name>[a-z][\w .]*?)%s\s+%s\s+(?:hatao|hata do|delete(?: karo| kar do)?|remove(?: karo)?|"
+                         r"mita do)|(?:delete|remove|forget)\s+(?P<name2>[a-z][\w .]*?)%s\s+%s" % (_OF, _EMAIL_WORDS, _OF, _EMAIL_WORDS), s)
+        if e:
+            return {"intent": "delete_handle", "entities": {"name": (e.group("name") or e.group("name2")).strip(),
+                                                             "app": "gmail"}}
+    if not m:   # "instagram pe rahul ka username rahul_23 hai"
+        m = re.fullmatch(r"(?:on\s+|in\s+)?(?P<app>%s)\s+(?:pe|par|me|mein|main|on|in)\s+(?P<name>[a-z][\w .]*?)%s\s+%s\s*"
+                         r"(?:is|hai|=|:|-)?\s*@?(?P<h>[a-z0-9._+@-]{1,120})(?:\s+(?:hai|h|he))?" % (apps, _OF, _HANDLE_WORD), s)
+    if not m:   # "rahul ka snap rahul.snap hai" (no 'username', but ends with 'hai')
+        m = re.fullmatch(r"(?P<name>[a-z][\w .]*?)%s\s+(?P<app>%s)\s+@?(?P<h>[a-z0-9._+@-]{1,120})\s+(?:hai|h|he)" % (_OF, apps), s)
+    if not m:   # "set rahul's instagram to rahul_23"
+        m = re.fullmatch(r"(?:set|save|change|update)\s+(?P<name>[a-z][\w .]*?)%s\s+(?P<app>%s)(?:\s+%s)?\s+(?:to|as|=)\s*"
+                         r"@?(?P<h>[a-z0-9._+@-]{1,120})" % (_OF, apps, _HANDLE_WORD), s)
+    if m and m.group("h") not in ("hai", "kya", "batao", "hatao", "delete", "kholo", "open"):
+        return {"intent": "save_handle", "entities": {"name": m.group("name").strip(),
+                                                       "app": control.social_app(m.group("app")),
+                                                       "handle": m.group("h")}}
+    return None
+
+
+SMALLTALK = (
+    ("greet", r"(?:hi+|hello+|hey+|hiya|yo|hola|namaste|namaskar|salaam|salam|sup|good\s+(?:morning|afternoon|evening)|"
+              r"gm|ram ram|sat sri akal|pranam)(?:\s+(?:lazey|lazy|there|ji|bhai|dost|buddy|assistant))*"),
+    ("how_are_you", r"(?:(?:hi|hello|hey)\s+)?(?:how are you|how r u|how are u|how's it going|hows it going|what'?s up|"
+                    r"wassup|whats up|kaise ho(?: aap)?|kaise hain|kaisa hai|kya haal(?: hai)?|kya hal(?: hai)?|"
+                    r"aap kaise ho|tum kaise ho)(?:\s+(?:lazey|lazy|ji|bhai|dost))*"),
+    ("thanks", r"(?:ok(?:ay)?\s+|acha\s+|accha\s+)?(?:thanks?|thank you|thank u|thx|ty|shukriya|dhanyavaad?|dhanyawad|"
+               r"shukria|bahut shukriya|thanks a lot|many thanks|thanks lazey|thank you lazey)(?:\s+(?:lazey|lazy|ji|bhai|so much|a lot))*"),
+    ("help", r"(?:help(?: me)?|what can you do|what do you do|how do you work|how to use(?: you| this)?|"
+             r"tum kya kar sakte ho|aap kya kar sakte ho|tum kya kya kar sakte ho|kya kya kar sakte ho|"
+             r"kya kar sakte ho|tum kya karte ho|kya kar sakta hai|commands|features|madad|madad karo|help karo|mujhe help chahiye)"),
+    ("who", r"(?:who are you|who r u|what are you|what is your name|what'?s your name|your name|tum kaun ho|aap kaun ho|"
+            r"tera naam kya hai|tumhara naam kya hai|aapka naam kya hai|naam kya hai tumhara|tu kaun hai)"),
+    ("bye", r"(?:bye+|goodbye|good bye|see you(?: later)?|see ya|tata|ta ta|alvida|phir milte hain|chalo bye|ok bye|"
+            r"good night|gn|shubh ratri|shubhratri)(?:\s+(?:lazey|lazy|ji|bhai))*"),
+    ("ack", r"(?:ok(?:ay)?|okk+|k|kk|fine|cool|nice|great|awesome|got it|understood|theek hai|thik hai|theek|thik|"
+            r"acha|accha|achha|badhiya|mast|sahi hai|sahi|haan theek hai|ok cool|ok done|samajh gaya|samajh gayi)"),
+)
+
+
+def smalltalk_kind(low):
+    """'hello', 'thanks', 'kaise ho', 'what can you do' -> a kind of small talk, else None.
+    Whole-message matches only, so a command that merely starts with 'hi' is never swallowed."""
+    s = re.sub(r"[^\w' ]+", " ", low.lower())
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"(.)\1{2,}", r"\1\1", s)  # "hiiiii" -> "hii"
+    for kind, rx in SMALLTALK:
+        if re.fullmatch(rx, s):
+            return kind
+    return None
 
 
 def _clean(s, limit):
@@ -668,6 +943,11 @@ def validate(raw, today: date) -> Intent:
                     continue
             elif k == "steps":
                 v = [_clean(x, 300) for x in list(v)[:10] if str(x).strip()] or ""
+            elif k == "ui_steps":
+                keep = {"op", "app", "text", "dir", "seconds"}
+                v = [{kk: (_clean(vv, control.MAX_TEXT) if isinstance(vv, str) else vv)
+                      for kk, vv in s.items() if kk in keep}
+                     for s in list(v)[:control.MAX_STEPS] if isinstance(s, dict) and s.get("op") in control.OPS] or ""
             elif k == "days":
                 v = sorted({int(d) for d in v if 1 <= int(d) <= 7}) or ""
             elif k == "seconds":
@@ -684,7 +964,21 @@ def validate(raw, today: date) -> Intent:
             elif k == "video":
                 v = bool(v)
             elif k == "channel":
-                if v not in ("sms", "whatsapp"):
+                if v not in ("sms", "whatsapp") and not (name == "send_message" and (v in control.SOCIAL or v == "email")) \
+                        and not (name == "schedule_message" and v in control.SOCIAL):   # -> an app automation
+                    continue
+            elif k == "handle":   # a username, an email address or a +number (checked per app in the assistant)
+                v = str(v).strip().lstrip("@")
+                if src.get("app") == "discord":   # a display name (may have spaces)
+                    v = _clean(v, 32)
+                    if not re.fullmatch(r"[^\x00-\x1f()]{1,32}", v):
+                        continue
+                    ent[k] = v
+                    continue
+                if not re.fullmatch(r"[A-Za-z0-9._%+@-]{1,120}", v):
+                    continue
+            elif k == "msg_app":
+                if v not in messaging.LABEL:
                     continue
             elif k == "repeat":
                 if v not in ("daily", "unsupported"):

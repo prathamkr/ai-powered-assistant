@@ -18,7 +18,8 @@ import java.util.ArrayList;
  * Fires at the scheduled time (app may be closed). Sets tomorrow's alarm first, then:
  *  - sms: sends the SMS automatically (needs SEND_SMS) and shows a notification;
  *  - whatsapp: shows a notification; tapping it opens WhatsApp with the text filled in and the
- *    user presses Send (WhatsApp offers no way for other apps to send on their own).
+ *    user presses Send (WhatsApp offers no way for other apps to send on their own);
+ *  - notice: a reminder notification; automation / routine: a "tap to run" notification.
  */
 public class DailyReceiver extends BroadcastReceiver {
     @Override
@@ -35,6 +36,20 @@ public class DailyReceiver extends BroadcastReceiver {
             int hour = o.getInt("hour"), minute = o.getInt("minute");
             // next time (tomorrow / next allowed weekday), even if sending fails below
             DailyMessages.setAlarm(ctx, id, hour, minute, o.optInt("days", 0));
+            if ("notice".equals(o.optString("channel"))) {   // a daily reminder (Menu > Automations)
+                DailyMessages.notify(ctx, id, "Reminder", o.getString("text"), openApp(ctx, id));
+                return;
+            }
+            if ("automation".equals(o.optString("channel"))) {   // tap -> the app runs the approved steps
+                Intent run = new Intent(ctx, RoutineTapActivity.class);
+                run.setData(Uri.parse("pa-routine://" + id));
+                run.putExtra("pa_run_routine", "auto:" + id);
+                run.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                PendingIntent tap = PendingIntent.getActivity(ctx, id, run,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                DailyMessages.notify(ctx, id, "Automation: " + o.getString("name"), "Tap to run it now.", tap);
+                return;
+            }
             if ("routine".equals(o.optString("channel"))) {
                 String name = o.getString("name");
                 Intent run = new Intent(ctx, RoutineTapActivity.class);

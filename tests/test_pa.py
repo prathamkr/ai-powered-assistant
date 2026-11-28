@@ -223,7 +223,7 @@ class Calls(unittest.TestCase):
 
     def test_single_match_calls_immediately(self):
         r = self.a.handle("mummy ko call karo")
-        self.assertIn("Calling ", r.text)
+        self.assertIn("ko call kar raha hoon", r.text)
         self.assertEqual(self.phone.calls, [{"name": "Mummy", "number": "9000000001", "sim_slot": None}])
 
     def test_prefix_picks_the_right_contact(self):
@@ -266,15 +266,15 @@ class Calls(unittest.TestCase):
 
     def test_prefix_without_match_calls_nobody(self):
         r = self.a.handle("rahul 7000 ko call karo")
-        self.assertIn("No contact found", r.text)
+        self.assertIn("contact nahi mila", r.text)
         self.assertEqual(self.phone.calls, [])
 
     def test_ambiguous_name_asks_then_calls_choice(self):
         r = self.a.handle("rahul ko call karo")
         self.assertEqual((r.kind, len(r.options)), ("choose", 2))
-        self.assertIn("first 4 digits", r.text)
+        self.assertIn("pehle 4 digit", r.text)
         self.assertEqual(self.phone.calls, [])  # nothing before the user picks
-        self.assertIn("Calling ", self.a.handle("2").text)
+        self.assertIn("ko call kar raha hoon", self.a.handle("2").text)
         self.assertEqual(self.phone.calls[0]["number"], "98111 22233")
 
     def test_choice_keeps_requested_sim(self):
@@ -356,7 +356,7 @@ class Photos(unittest.TestCase):
     def test_keyword_and_all(self):
         self.assertEqual([i["id"] for i in self.a.handle("camera ki photos").items], [1, 3])
         self.assertEqual([i["id"] for i in self.a.handle("pichle hafte ke screenshots").items], [2])
-        self.assertIn("No photos found", self.a.handle("goa ki photos dikhao").text)
+        self.assertIn("Koi photo nahi mili", self.a.handle("goa ki photos dikhao").text)
 
     def test_open_only_listed_photo(self):
         self.a.handle("aaj ki photos")
@@ -369,7 +369,7 @@ class Photos(unittest.TestCase):
         r = a.handle("aaj ki photos")
         self.assertEqual((r.kind, r.permissions), ("need_permission", ["android.permission.READ_MEDIA_IMAGES"]))
         a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), photos=FakePhotos(PICS, perm="partial"))
-        self.assertIn("you gave access to", a.handle("aaj ki photos").text)
+        self.assertIn("jinki permission di hai", a.handle("aaj ki photos").text)
 
     def test_audit_has_only_count(self):
         self.a.handle("camera ki photos")
@@ -488,7 +488,7 @@ class Backends(unittest.TestCase):
         os.environ["PA_ALLOW_INSECURE_DEV_KEY"] = "1"
         try:
             a = build_assistant(tempfile.mkdtemp())
-            self.assertIn("Note saved", a.handle("Note karo: hello world").text)
+            self.assertIn("Note save ho gaya", a.handle("Note karo: hello world").text)
             self.assertEqual(a.handle("Kal project par 45 minutes kaam karne ka time nikalo").kind, "need_info")
         finally:
             os.environ.pop("PA_ALLOW_INSECURE_DEV_KEY", None)
@@ -573,8 +573,8 @@ class Acceptance(unittest.TestCase):
         path = os.path.join(tempfile.mkdtemp(), "a.db")
         a, store, cal = make(path)
         # 1 preference, 2 note
-        self.assertIn("Preference saved", a.handle("Yaad rakho mujhe subah kaam karna pasand hai.").text)
-        self.assertIn("Note saved", a.handle("Note karo: project report mein budget section add karna hai").text)
+        self.assertIn("Preference save ho gayi", a.handle("Yaad rakho mujhe subah kaam karna pasand hai.").text)
+        self.assertIn("Note save ho gaya", a.handle("Note karo: project report mein budget section add karna hai").text)
         # unrelated note must not outrank the right one
         a.handle("Note karo: doodh aur bread kharidna hai")
         # 3 retrieval
@@ -588,7 +588,7 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(cal.executed, [])  # nothing happens before approval
         # 5 approve exact action: honest hand-off wording
         out = a.approve(r.action_id, r.action_hash)
-        self.assertIn("tap Save there", out.text)
+        self.assertIn("Wahan Save dabane par hi event banega", out.text)
         self.assertEqual(len(cal.executed), 1)
         # 6 restart: data persists
         store.db.close()
@@ -607,7 +607,7 @@ class Acceptance(unittest.TestCase):
         a.reject(r.action_id)
         self.assertEqual(cal.executed, [])
         self.assertEqual(a.list_tasks(), [])
-        self.assertIn("already done", a.approve(r.action_id, r.action_hash).text)
+        self.assertIn("pehle hi ho chuka hai", a.approve(r.action_id, r.action_hash).text)
         self.assertEqual(cal.executed, [])
 
     def test_asks_for_missing_constraint_without_preference(self):
@@ -621,7 +621,7 @@ class Acceptance(unittest.TestCase):
     def test_unknown_calendar_availability_is_disclosed(self):
         a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), FakeCalendar(busy=None))
         a.handle("Yaad rakho mujhe subah kaam karna pasand hai.")
-        self.assertIn("could not check calendar availability", a.handle("Kal project par 45 minutes kaam karne ka time nikalo.").text)
+        self.assertIn("calendar check nahi ho paya", a.handle("Kal project par 45 minutes kaam karne ka time nikalo.").text)
 
     def test_unsupported_and_temporary(self):
         a, _, cal = make(os.path.join(tempfile.mkdtemp(), "a.db"))
@@ -833,6 +833,14 @@ class FakeDaily(Adapter):  # TEST-ONLY mock of the Java alarm side
         self.saved[rid] = {"reminder": text, "at_ms": at_ms}
         return Result("done", "reminder set")
 
+    def set_notice(self, sid, text, time, days=None):
+        self.saved[sid] = {"notice": text, "time": time, "days": days}
+        return Result("done", "notice scheduled")
+
+    def set_automation(self, sid, label, time, days=None):
+        self.saved[sid] = {"automation": label, "time": time, "days": days}
+        return Result("done", "automation scheduled")
+
 
 DAILY_BOOK = [{"name": "Mummy", "number": "9000000001"}, {"name": "Neha", "number": "9000000011"},
               {"name": "Neha 2", "number": "9000000022"}, {"name": "Rahul Sharma", "number": "+91 98765 43210"},
@@ -903,11 +911,11 @@ class DailyMessages(unittest.TestCase):
         self.assertIn("Neha (9000000011)", r.text)     # exact name: not 'Neha 2'
         self.assertEqual(self.daily.saved, {})         # nothing scheduled before Approve
         out = a.approve(r.action_id, r.action_hash)
-        self.assertIn("scheduled for 08:00", out.text)
+        self.assertIn("roz 08:00 baje ke liye schedule ho gaya", out.text)
         self.assertEqual(len(self.daily.saved), 1)
         recs = a.list_schedules()
         self.assertEqual((recs[0]["name"], recs[0]["channel"], recs[0]["text"]), ("Neha", "whatsapp", "good morning"))
-        self.assertIn("already", a.approve(r.action_id, r.action_hash).text)  # second tap does nothing
+        self.assertIn("pehle hi ho chuka hai", a.approve(r.action_id, r.action_hash).text)  # second tap does nothing
         self.assertEqual(len(self.daily.saved), 1)
         self.assertTrue(a.delete_schedule(recs[0]["id"]))
         self.assertEqual((self.daily.saved, a.list_schedules()), ({}, []))
@@ -940,8 +948,8 @@ class DailyMessages(unittest.TestCase):
         self.assertEqual(a.handle("har subah mummy ko message karo").kind, "need_info")   # no text
         self.assertEqual(a.handle("har mahine subah 9 baje mummy ko 'hi' sms bhejo").kind, "unsupported")
         r = a.handle("har monday subah 9 baje mummy ko 'hi' sms bhejo")
-        self.assertIn("Every Monday at 09:00", r.text)
-        self.assertIn("No contact", a.handle("har subah 8 baje zzqx ko 'hi' sms bhejo").text)
+        self.assertIn("Har Monday 09:00 baje", r.text)
+        self.assertIn("contact nahi mila", a.handle("har subah 8 baje zzqx ko 'hi' sms bhejo").text)
 
     def test_resume_and_delete_all(self):
         a = self.mk()
@@ -962,7 +970,7 @@ class DailyMessages(unittest.TestCase):
         r = a.handle("har subah 8 baje mummy ko 'hi' sms bhejo")
         out = a.approve(r.action_id, r.action_hash)
         self.assertEqual(out.extra, "battery_exemption")
-        self.assertIn("run in the background", out.text)
+        self.assertIn("Lazey ko background mein chalne do", out.text)
         self.daily.battery_exempt = lambda: True
         r = a.handle("har raat 10 baje mummy ko 'bye' sms bhejo")
         self.assertIsNone(a.approve(r.action_id, r.action_hash).extra)
@@ -1014,7 +1022,7 @@ class Alarms(unittest.TestCase):
                 ("raat 11 baje alarm laga do", (23, 0, None, None), None),
                 ("set an alarm at 6 am for gym", (6, 0, "gym", None), None),
                 ("har din 6 baje ka alarm", (6, 0, None, [1, 2, 3, 4, 5, 6, 7]),
-                 "Alarm set for 6:00 AM every day in your Clock app.")):
+                 "Clock app mein roz 6:00 AM ka alarm set ho gaya.")):
             r = a.handle(text)
             self.assertEqual(self.al.alarms[-1], want, text)
             if reply:
@@ -1039,7 +1047,9 @@ class Alarms(unittest.TestCase):
 
     def test_timer_and_show(self):
         a = self.mk()
-        self.assertEqual(a.handle("10 minute ka timer lagao").text, "Timer set for 10 minutes.")
+        self.assertEqual(a.handle("10 minute ka timer lagao").text, "10 minutes ka timer set ho gaya.")
+        self.assertEqual(a.handle("set a timer for 10 minutes").text, "Timer set for 10 minutes.")
+        self.al.timers.pop()
         a.handle("timer 1 hour 30 minutes")
         self.assertEqual(self.al.timers, [600, 5400])
         a.handle("show my alarms")
@@ -1086,18 +1096,21 @@ class Everyday(unittest.TestCase):
     def test_phone_status(self):
         a = self.mk(device=FakeDevice(battery=15))
         self.assertEqual(a.handle("battery kitni hai").text,
+                         "Battery: 15%, charge nahi ho rahi, 31.5°C. Battery kam hai: jaldi charge karo.")
+        self.assertEqual(a.handle("how much battery is left").text,
                          "Battery: 15%, not charging, 31.5°C. Battery is low: charge the phone soon.")
-        self.assertIn("almost full", a.handle("storage kitna bacha hai").text)
+        self.assertIn("lagbhag bhar gaya", a.handle("storage kitna bacha hai").text)
         self.assertIn("Android 16", a.handle("phone details batao").text)
         self.assertIn("works fully offline", a.handle("is internet working?").text)
         self.assertIn("dark mode on", a.handle("brightness kitni hai").text)
-        self.assertEqual(a.handle("agla alarm kab hai").text, "No alarm is set.")
+        self.assertEqual(a.handle("agla alarm kab hai").text, "Koi alarm set nahi hai.")
+        self.assertEqual(a.handle("when is my next alarm").text, "No alarm is set.")
         self.assertTrue(a.handle("what time is it").text.startswith("It is "))
 
     def test_reminder_sets_one_time_alarm(self):
         a = self.mk()   # NOW = 2026-11-20 10:00 +05:30
         r = a.handle("mujhe kal 5 baje yaad dilana ki bill bharna hai")
-        self.assertEqual(r.text, "Reminder set for tomorrow 5:00 PM: bill bharna hai")
+        self.assertEqual(r.text, "Reminder set: kal 5:00 PM: bill bharna hai")
         (rid, saved), = self.daily.saved.items()
         self.assertEqual(saved["reminder"], "bill bharna hai")
         at = datetime.fromtimestamp(saved["at_ms"] / 1000, NOW.tzinfo)
@@ -1127,15 +1140,15 @@ class Everyday(unittest.TestCase):
         txt = a.handle("aaj ka plan kya hai").text
         self.assertIn("10:00-11:30 busy (calendar)", txt)
         self.assertIn("18:00 drink water", txt)
-        self.assertIn("battery is 25%", txt)
-        self.assertIn("Suggestion: do 'pay electricity bill' at 09:00-09:30", txt)  # free before the 10:00 meeting
+        self.assertIn("battery 25% hai", txt)
+        self.assertIn("Suggestion: 'pay electricity bill' 09:00-09:30 par karo", txt)  # free before the 10:00 meeting
         a.handle("Yaad rakho mujhe shaam ko kaam karna pasand hai")
         self.assertIn("at 17:00-17:30 (first free 30 minutes, your preferred evening)", a.handle("plan my day").text)
 
     def test_routine_create_run_and_by_name(self):
         a = self.mk()
         r = a.handle("routine good morning: set an alarm for 7 am; battery kitni hai then open whatsapp")
-        self.assertIn("Saved routine 'good morning' (3 steps)", r.text)
+        self.assertIn("Routine 'good morning' save ho gaya (3 step)", r.text)
         r = a.handle("good morning")                       # just the name runs it
         self.assertTrue(r.text.startswith("Routine 'good morning' done:"), r.text)
         self.assertEqual(self.al.alarms[-1][:2], (7, 0))
@@ -1151,7 +1164,7 @@ class Everyday(unittest.TestCase):
         r = a.handle("set an alarm for 6 am and battery kitni hai then open youtube and open whatsapp")
         self.assertEqual(self.al.alarms, [(6, 0, None, None)])
         self.assertEqual(self.apps.opened, ["com.google.android.youtube"])  # 2nd app would cut the 1st off
-        self.assertIn("Not run because another app is already open: open whatsapp", r.text)
+        self.assertIn("Nahi chale kyunki ek aur app pehle se khula hai: open whatsapp", r.text)
         a.handle("Note: buy eggs and milk")                # free text is never split
         self.assertEqual(self.store.all("note")[0]["text"], "buy eggs and milk")
 
@@ -1173,10 +1186,10 @@ class Everyday(unittest.TestCase):
         a = self.mk()
         self.daily.set_routine_trigger = lambda sid, name, time, days=None: (
             self.daily.saved.__setitem__(sid, {"routine": name, "time": time, "days": days}) or Result("done"))
-        self.assertIn("No routine called", a.handle("good morning routine har din 7 baje").text)
+        self.assertIn("naam ka koi routine nahi hai", a.handle("good morning routine har din 7 baje").text)
         a.handle("routine good morning: battery kitni hai; open whatsapp")
         r = a.handle("good morning routine weekdays subah 7 baje chalao")
-        self.assertIn("Every weekday (Mon-Fri) at 07:00", r.text)
+        self.assertIn("Har weekday (Mon-Fri) 07:00 baje", r.text)
         (sid, saved), = self.daily.saved.items()
         self.assertEqual(saved, {"routine": "good morning", "time": "07:00", "days": [2, 3, 4, 5, 6]})
         a.handle("schedule good morning routine every day at 6 am")     # replaces the old time
@@ -1201,7 +1214,9 @@ class Everyday(unittest.TestCase):
         a = self.mk()
         self.assertEqual(a.handle("mujhe alarm chahiye kal").kind, "need_info")  # understood: asks the time
         r = a.handle("mujhe doodh lena bhoolna nahi hai")
-        self.assertTrue(r.text.startswith("Sorry, I did not understand that. Try:\n- remind me at 6 pm"), r.text)
+        self.assertTrue(r.text.startswith("Sorry, main samjha nahi. Aise bolo:\n- shaam 6 baje yaad dilana"), r.text)
+        r = a.handle("i do not want to forget the milk")
+        self.assertTrue(r.text.startswith("Sorry, I did not understand that. Try:\n- "), r.text)
         self.assertIn("- ", a.handle("xyz qwerty").text)
 
     def test_usko_means_last_contact_but_asks_first(self):
@@ -1209,12 +1224,12 @@ class Everyday(unittest.TestCase):
         self.assertEqual(a.handle("usko call karo").kind, "need_info")      # nobody yet
         a.handle("mummy ko call karo")
         r = a.handle("usko phir se call karo")
-        self.assertEqual((r.kind, r.text), ("choose", "Call Mummy (9000000001) again? Say 1 or yes."))
+        self.assertEqual((r.kind, r.text), ("choose", "Mummy (9000000001) ko dobara Call karun? 1 ya haan bolo."))
         self.assertEqual(len(self.phone.calls), 1)                          # not called yet
         a.handle("haan")
         self.assertEqual([c["number"] for c in self.phone.calls], ["9000000001", "9000000001"])
         a.handle("usko call karo")
-        self.assertEqual(a.handle("nahi").text, "Okay, nothing was done.")
+        self.assertEqual(a.handle("nahi").text, "Theek hai, kuch nahi kiya.")
         self.assertEqual(len(self.phone.calls), 2)
 
     def test_proposal_alone_does_not_become_last_contact(self):
@@ -1451,13 +1466,14 @@ class SendNow(unittest.TestCase):
                            ("whatsapp video call neha", ("9000000011", True))):
             r = a.handle(text)
             self.assertEqual(self.msg.wa_calls[-1], want, text)
-            self.assertTrue(r.text.startswith("Starting a WhatsApp"), r.text)
+            self.assertTrue(r.text.startswith("Starting a WhatsApp") or "WhatsApp voice call laga raha hoon" in r.text,
+                            r.text)
         r = a.handle("call rahul on whatsapp")                 # two Rahuls -> asks
         self.assertEqual(r.kind, "choose")
         a.handle("2")
         self.assertEqual(self.msg.wa_calls[-1], ("98111 22233", False))
         r = a.handle("usko whatsapp call karo")                # context -> asks first
-        self.assertTrue(r.text.startswith("WhatsApp-call Rahul Verma"), r.text)
+        self.assertTrue(r.text.startswith("Rahul Verma (98111 22233) ko dobara WhatsApp-call karun"), r.text)
         self.assertEqual(len(self.msg.wa_calls), 4)
         self.msg.not_on_whatsapp = ("9000000001",)
         r = a.handle("call mummy on whatsapp")                 # not on WhatsApp -> opens the chat instead
@@ -1486,9 +1502,9 @@ class SendNow(unittest.TestCase):
     def test_asks_one_thing_at_a_time_and_remembers(self):
         a = self.mk()
         r = a.handle("whatsapp pe message bhejo")
-        self.assertEqual((r.kind, r.text), ("need_info", "Who should get the message?"))
-        r = a.handle("mummy")
-        self.assertIn("What should the message to mummy say?", r.text)
+        self.assertEqual((r.kind, r.text), ("need_info", "Message kisko bhejun?"))
+        r = a.handle("mummy")                              # no language of its own: stays Hinglish
+        self.assertIn("Mummy ko message mein kya likhun?", r.text)
         a.handle("hii")
         self.assertEqual(self.msg.whatsapp, [("9000000001", "hii")])
         r = a.handle("message to neha on whatsapp")      # text missing
@@ -1502,6 +1518,1059 @@ class SendNow(unittest.TestCase):
         self.assertEqual(wa_number("98765 43210"), "919876543210")
         self.assertEqual(wa_number("+91 98765 43210"), "919876543210")
         self.assertEqual(wa_number("09876543210"), "919876543210")
+
+
+class WiderLanguage(unittest.TestCase):
+    """More English / Hinglish phrasings (added after a corpus run showed they were not understood)."""
+    P = ConstrainedParser()
+    TODAY = date(2026, 11, 25)
+
+    def v(self, text):
+        return validate(self.P.parse(text, self.TODAY), self.TODAY)
+
+    def test_call_phrasings(self):
+        for text, name in (("mummy se baat karni hai", "mummy"), ("can you ring rahul", "rahul"),
+                           ("papa ko fon lagao", "papa"), ("i want to talk to mummy", "mummy"),
+                           ("mujhe rahul se baat karni hai", "rahul"), ("ring mom", "mom"),
+                           ("give a call to papa", "papa"), ("mummy ko call karna hai", "mummy"),
+                           ("call back neha", "neha"), ("please call my mom", "mom")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("name")), ("call_contact", name), text)
+
+    def test_message_phrasings(self):
+        for text, name, msg in (("rahul ko bol do main aa raha hu", "rahul", "main aa raha hu"),
+                                ("papa ko batao ki main pahunch gaya", "papa", "main pahunch gaya"),
+                                ("rahul ko bolo ki kal milte hain", "rahul", "kal milte hain"),
+                                ("mummy ko text kar do ki aa gaya", "mummy", "aa gaya"),
+                                ("papa ko likho ki call karo", "papa", "call karo")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("name"), i.entities.get("text")), ("send_message", name, msg), text)
+        for text in ("text mummy i am coming", "tell rahul i will be late"):
+            i = self.v(text)
+            self.assertEqual(i.intent, "send_message", text)
+            self.assertTrue(i.entities.get("name_text"), text)  # the assistant splits it with the contacts
+
+    def test_open_app_phrasings(self):
+        for text, app in (("go to instagram", "instagram"), ("take me to maps", "maps"),
+                          ("mujhe instagram kholna hai", "instagram"), ("camera on karo", "camera"),
+                          ("i want to open youtube", "youtube")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("app")), ("open_app", app), text)
+
+    def test_settings_and_chat_stay_out_of_apps_and_calls(self):
+        for text in ("wifi on karo", "torch on karo", "volume kam karo", "ringtone badal do"):
+            self.assertNotIn(self.v(text).intent, ("open_app", "call_contact"), text)
+        for text in ("I want to go to market", "tell me a joke", "what is the capital of france",
+                     "my talk is tomorrow", "good morning everyone how are you doing"):
+            self.assertEqual(self.v(text).intent, "unknown", text)
+
+    def test_info_phrasings(self):
+        for text, cat in (("aaj kya date hai", "time"), ("what's the time now", "time"),
+                          ("is wifi connected", "network"), ("net chal raha hai", "network"),
+                          ("internet chal raha hai kya", "network")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("category")), ("device_info", cat), text)
+
+    def test_todo_and_note_phrasings(self):
+        i = self.v("add buy milk to my to do list")
+        self.assertEqual((i.intent, i.entities.get("text")), ("add_todo", "buy milk"))
+        self.assertEqual(self.v("meri list dikhao").intent, "list_todos")
+        self.assertEqual(self.v("kya kya pending hai").intent, "list_todos")
+        for text, what in (("buy milk done", "buy milk"), ("milk wala kaam ho gaya", "milk")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("text")), ("done_todo", what), text)
+        for text, note in (("make a note buy gift", "buy gift"), ("mera note save karo ki kal exam hai", "kal exam hai"),
+                           ("ye note kar lo ki cab book karni hai", "cab book karni hai"),
+                           ("note karo meeting at 5", "meeting at 5")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("text")), ("add_note", note), text)
+        self.assertEqual(self.v("mujhe yaad rakhna ki main chai pasand karta hu").intent, "remember_preference")
+
+    def test_small_talk(self):
+        for text, kind in (("hello", "greet"), ("hiii lazey", "greet"), ("namaste", "greet"), ("thanks", "thanks"),
+                           ("thank you so much", "thanks"), ("shukriya", "thanks"), ("kaise ho", "how_are_you"),
+                           ("what can you do", "help"), ("tum kya kar sakte ho", "help"), ("ok", "ack"),
+                           ("theek hai", "ack"), ("bye", "bye"), ("who are you", "who")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("kind")), ("smalltalk", kind), text)
+        # a command that merely starts like small talk is still a command
+        i = self.v("hello lazey, call mummy")
+        self.assertEqual((i.intent, i.entities.get("name")), ("call_contact", "mummy"))
+        self.assertEqual(self.v("ok open whatsapp").entities.get("app"), "whatsapp")
+
+    def test_small_talk_replies_and_never_acts(self):
+        msg = FakeMessages()
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), contacts=FakeContacts(DAILY_BOOK),
+                       phone=FakePhone(), messages=msg)
+        for text in ("hello", "thanks", "kaise ho", "what can you do", "ok", "bye"):
+            r = a.handle(text)
+            self.assertEqual(r.kind, "info", text)
+            self.assertNotIn("did not understand", r.text, text)
+        self.assertEqual(msg.whatsapp, [])
+        # the answer to "what should it say?" may itself be a greeting
+        a.handle("whatsapp pe message bhejo")
+        a.handle("mummy")
+        a.handle("hello")
+        self.assertEqual(msg.whatsapp, [("9000000001", "hello")])
+
+
+class FakeControl(Adapter):  # TEST-ONLY mock of the phone-control Accessibility service
+    name = "phone_control"
+
+    def __init__(self, on=True):
+        self.on, self.started, self.result = on, [], None
+
+    def capability_check(self):
+        return True
+
+    def ready(self):
+        return self.on
+
+    def permission_check(self):
+        return "granted" if self.on else "denied"
+
+    def validate(self, p):
+        from pa import control
+        return control.validate_steps(p.get("steps"))
+
+    def preview(self, p):
+        from pa import control
+        return control.preview(p["steps"])
+
+    def execute(self, p):
+        self.started.append(p["steps"])
+        return Result("handed_off", "steps running")
+
+    def take_result(self):
+        r, self.result = self.result, None
+        return r
+
+
+class PhoneControl(unittest.TestCase):
+    P = ConstrainedParser()
+    D = date(2026, 11, 25)
+    APPS = [{"label": "YouTube", "package": "com.google.android.youtube"},
+            {"label": "WhatsApp", "package": "com.whatsapp"},
+            {"label": "Settings", "package": "com.android.settings"}]
+
+    def v(self, text):
+        return validate(self.P.parse(text, self.D), self.D)
+
+    def mk(self, on=True):
+        self.ctl = FakeControl(on)
+        a, store, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), apps=FakeApps(self.APPS), control=self.ctl)
+        return a
+
+    def test_parse_steps(self):
+        cases = {
+            "youtube kholo phir lofi search karo": [{"op": "open", "app": "youtube"}, {"op": "search", "text": "lofi"}],
+            "search lofi songs on youtube": [{"op": "open", "app": "youtube"}, {"op": "search", "text": "lofi songs"}],
+            "whatsapp kholo, rahul pe click karo, hi type karo": [
+                {"op": "open", "app": "whatsapp"}, {"op": "click", "text": "rahul"}, {"op": "type", "text": "hi"}],
+            "back jao": [{"op": "back"}], "home jao": [{"op": "home"}], "neeche scroll karo": [{"op": "scroll", "dir": "down"}],
+            "screen pe kya hai": [{"op": "read"}], "notifications dikhao": [{"op": "notifications"}],
+            'type "rock and roll"': [{"op": "type", "text": "rock and roll"}],
+            "instagram kholo phir 2 second ruko": [{"op": "open", "app": "instagram"}, {"op": "wait", "seconds": 2}],
+            "youtube kholo phir search pe click karo phir lofi beats type karo phir enter dabao": [
+                {"op": "open", "app": "youtube"}, {"op": "click", "text": "search"}, {"op": "type", "text": "lofi beats"},
+                {"op": "enter"}],
+        }
+        for text, steps in cases.items():
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("ui_steps")), ("phone_control", steps), text)
+
+    def test_other_commands_unchanged(self):
+        for text, intent in (("open whatsapp", "open_app"), ("whatsapp kholo", "open_app"),
+                             ("open whatsapp and send neha a message hi", "send_message"),
+                             ("kal ki photos dhundo", "find_photos"), ("call mummy", "call_contact"),
+                             ("set alarm 6 and open whatsapp", "set_alarm")):
+            self.assertEqual(self.v(text).intent, intent, text)
+
+    def test_needs_the_service_switched_on(self):
+        a = self.mk(on=False)
+        r = a.handle("youtube kholo phir lofi search karo")
+        self.assertEqual(r.extra, "control_setup")
+        self.assertEqual(self.ctl.started, [])
+
+    def test_needs_an_app_first(self):
+        a = self.mk()
+        r = a.handle("rahul pe click karo")
+        self.assertEqual(r.kind, "need_info")
+        self.assertEqual(self.ctl.started, [])
+
+    def test_runs_only_after_approve_and_reports(self):
+        a = self.mk()
+        r = a.handle("youtube kholo phir lofi search karo")
+        self.assertEqual(r.kind, "proposal")
+        self.assertIn('1. YouTube kholna', r.text)
+        self.assertIn('2. "lofi" search karna', r.text)
+        self.assertEqual(self.ctl.started, [])                     # nothing before Approve
+        out = a.approve(r.action_id, r.action_hash)
+        self.assertIn("Steps chala raha hoon", out.text)
+        self.assertEqual(self.ctl.started[0][0]["package"], "com.google.android.youtube")
+        self.assertEqual(a.approve(r.action_id, r.action_hash).text, "Ye kaam pehle hi ho chuka hai.")
+        self.assertIsNone(a.control_report())                       # no result yet
+        self.ctl.result = {"status": "done", "step": 2, "total": 2, "detail": "", "read": []}
+        self.assertEqual(a.control_report().text, "Ho gaya: saare 2 steps poore hue.")   # Hinglish task
+        self.assertIsNone(a.control_report())                       # told once
+
+    def test_reject_runs_nothing_and_failure_is_told(self):
+        a = self.mk()
+        r = a.handle("whatsapp kholo phir rahul pe click karo")
+        a.reject(r.action_id)
+        self.assertEqual(self.ctl.started, [])
+        r = a.handle("youtube kholo phir screen padho")
+        a.approve(r.action_id, r.action_hash)
+        self.ctl.result = {"status": "failed", "step": 2, "total": 2, "detail": "no text", "read": ["Home", "Shorts"]}
+        out = a.control_report()
+        self.assertEqual(out.kind, "error")
+        self.assertIn("Step 2 (kul 2) par ruk gaya: no text.", out.text)
+        self.assertIn("- Shorts", out.text)
+
+    def test_hindi_script_is_left_out_of_screen_reading(self):
+        a = self.mk()
+        r = a.handle("youtube kholo phir screen padho")
+        a.approve(r.action_id, r.action_hash)
+        self.ctl.result = {"status": "done", "step": 2, "total": 2, "detail": "",
+                           "read": ["Sponsored - \u0938\u093f\u0930\u094d\u092b \u20b9399", "\u0939\u093f\u0902\u0926\u0940", "Home"]}
+        out = a.control_report().text
+        self.assertIn("- Sponsored - \u20b9399", out)
+        self.assertNotRegex(out, "[\u0900-\u097F]")
+        self.assertIn("- Home", out)
+        self.assertEqual(out.count("\n- "), 2)          # the all-Hindi line is gone
+
+    def test_risky_tap_is_marked_and_unknown_app_refused(self):
+        a = self.mk()
+        r = a.handle("whatsapp kholo phir rahul pe click karo phir hi type karo phir send pe click karo")
+        self.assertIn('"send" pe tap karna (ye button sach mein kuch karega)', r.text)
+        self.assertIn("naam ka app nahi mila", a.handle("zzqx kholo phir back jao").text)
+
+    def test_settings_app_is_refused_before_approval(self):
+        a = self.mk()
+        r = a.handle("settings kholo phir neeche scroll karo")
+        self.assertEqual(r.kind, "unsupported")
+        self.assertIn("band kar deta hai", r.text)
+        self.assertEqual(self.v("settings kholo").intent, "open_app")       # plain opening still works
+        self.assertIn("1 step:", a.handle("home jao").text)
+
+    def test_bad_steps_rejected(self):
+        from pa import control
+        self.assertTrue(control.validate_steps([{"op": "open"}]))                 # no package
+        self.assertTrue(control.validate_steps([{"op": "rm -rf"}]))
+        self.assertTrue(control.validate_steps([{"op": "type", "text": "a\nb"}]))
+        self.assertTrue(control.validate_steps([{"op": "back"}] * 13))
+        self.assertEqual(control.validate_steps([{"op": "home"}, {"op": "scroll", "dir": "down"}]), [])
+
+
+class SocialMessages(unittest.TestCase):
+    """Instagram / Messenger / Snapchat: saved usernames + approved phone-control plan."""
+    D = date(2026, 11, 27)
+    APPS = [{"label": "Instagram", "package": "com.instagram.android"},
+            {"label": "WhatsApp", "package": "com.whatsapp"}]
+
+    def mk(self, on=True, apps=None):
+        self.ctl = FakeControl(on)
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), apps=FakeApps(apps or self.APPS), control=self.ctl)
+        return a
+
+    def v(self, text):
+        return validate(ConstrainedParser().parse(text, self.D), self.D)
+
+    def test_parse(self):
+        for text, ent in (("rahul ka instagram username rahul_23 hai", {"name": "rahul", "app": "instagram", "handle": "rahul_23"}),
+                          ("Rahul ki insta id @rahul_23", {"name": "rahul", "app": "instagram", "handle": "rahul_23"}),
+                          ("save rahul's snapchat as rahul.snap", {"name": "rahul", "app": "snapchat", "handle": "rahul.snap"})):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities), ("save_handle", ent), text)
+        for text, ch, name, msg in (("rahul ko instagram pe hi bhejo", "instagram", "rahul", "hi"),
+                                    ("send hi to rahul on insta", "instagram", "rahul", "hi"),
+                                    ("messenger pe papa ko good night bhejo", "messenger", "papa", "good night"),
+                                    ("rahul ko snapchat pe message karo ki kal milte hain", "snapchat", "rahul", "kal milte hain")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("channel"), i.entities.get("name"), i.entities.get("text")),
+                             ("send_message", ch, name, msg), text)
+        self.assertEqual(self.v("usernames dikhao").intent, "list_handles")
+        self.assertEqual(self.v("rahul ka instagram username hatao").intent, "delete_handle")
+        self.assertEqual(self.v("instagram kholo").intent, "open_app")
+        self.assertEqual(self.v("rahul ko whatsapp pe hi bhejo").entities.get("channel"), "whatsapp")
+
+    def test_save_list_delete(self):
+        a = self.mk()
+        self.assertIn("@rahul_23", a.handle("rahul ka instagram username rahul_23 hai").text)
+        self.assertIn("@rahul_24", a.handle("rahul ka instagram username rahul_24 hai").text)   # replaces
+        self.assertIn("- rahul: Instagram @rahul_24", a.handle("usernames dikhao").text)
+        self.assertNotIn("rahul_23", a.handle("usernames dikhao").text)
+        self.assertIn("Deleted", a.handle("rahul ka instagram username hatao").text)
+        self.assertIn("Koi username saved nahi", a.handle("usernames dikhao").text)
+
+    def test_send_is_an_approved_checked_plan(self):
+        a = self.mk()
+        a.handle("rahul ka instagram username rahul_23 hai")
+        r = a.handle("rahul ko instagram pe hi bhejo")
+        self.assertEqual(r.kind, "proposal")
+        self.assertIn('Instagram pe rahul (@rahul_23) ko bhejna hai:\n"hi"', r.text)
+        self.assertEqual(self.ctl.started, [])                       # nothing before Approve
+        a.approve(r.action_id, r.action_hash)
+        steps = self.ctl.started[0]
+        self.assertEqual([s["op"] for s in steps], ["open_url", "expect", "type", "click", "expect_sent"])
+        self.assertEqual(steps[1]["chat_id"], "row_thread_composer_edittext")
+        self.assertEqual(steps[4]["text"], "hi")                    # Done only if the message shows up
+        self.assertEqual(steps[0]["url"], "https://ig.me/m/rahul_23")
+        self.assertEqual(steps[1]["text"], "rahul_23")              # checked before anything is typed
+        self.assertEqual((steps[2]["text"], steps[3]["text"]), ("hi", "send"))
+
+    def test_asks_for_what_is_missing(self):
+        a = self.mk()
+        self.assertIn("username nahi pata", a.handle("rahul ko instagram pe hi bhejo").text)
+        a.handle("rahul ka instagram username rahul_23 hai")
+        r = a.handle("instagram pe message bhejo")
+        self.assertIn("kisko", r.text)
+        r = a.handle("rahul")
+        self.assertIn("kya bhejna hai", r.text)
+        r = a.handle("kal milte hain")
+        self.assertEqual(r.kind, "proposal")
+        self.assertIn('"kal milte hain"', r.text)
+        r = a.handle("insta rahul kaise ho")                          # name + text in one go
+        self.assertIn('"kaise ho"', r.text)
+
+    def test_refuses_without_app_or_service(self):
+        a = self.mk(apps=[{"label": "WhatsApp", "package": "com.whatsapp"}])
+        a.handle("rahul ka instagram username rahul_23 hai")
+        self.assertIn("install nahi hai", a.handle("rahul ko instagram pe hi bhejo").text)
+        a = self.mk(on=False)
+        a.handle("rahul ka instagram username rahul_23 hai")
+        self.assertEqual(a.handle("rahul ko instagram pe hi bhejo").extra, "control_setup")
+        self.assertEqual(self.ctl.started, [])
+
+    def test_bad_links_and_handles_rejected(self):
+        from pa import control
+        st = control.social_steps("instagram", "rahul_23", "hi")
+        self.assertEqual(control.validate_steps(st), [])
+        self.assertTrue(control.validate_steps([dict(st[0], url="https://evil.example/x")] + st[1:]))
+        self.assertTrue(control.validate_steps([dict(st[0], package="com.evil")] + st[1:]))
+        self.assertFalse(control.valid_handle("instagram", "bad handle"))
+        self.assertFalse(control.valid_handle("instagram", "a" * 31))
+
+
+class KeyStoreRecovery(unittest.TestCase):
+    """A damaged key file must not leave the app stuck for good (seen on an emulator)."""
+
+    def test_reset_moves_files_aside(self):
+        from pa.bootstrap import reset_encrypted_store
+        d = tempfile.mkdtemp()
+        for n in ("pa.db", "dek.wrapped", "other.txt"):
+            open(os.path.join(d, n), "wb").write(b"x")
+        moved = reset_encrypted_store(d)
+        self.assertEqual(sorted(moved), ["dek.wrapped", "pa.db"])
+        names = os.listdir(d)
+        self.assertIn("other.txt", names)
+        self.assertFalse(os.path.exists(os.path.join(d, "pa.db")))
+        self.assertEqual(len([n for n in names if ".broken-" in n]), 2)   # kept, not deleted
+
+    def test_short_error_drops_java_stack(self):
+        from pa.keys import short_error
+        e = RuntimeError("JVM exception occurred: bad IV\n\tat javax.crypto.Cipher.init(Cipher.java:1289)\n\tat x")
+        self.assertEqual(short_error(e), "RuntimeError: JVM exception occurred: bad IV")
+
+    def test_atomic_write(self):
+        from pa.keys import write_atomic
+        p = os.path.join(tempfile.mkdtemp(), "k")
+        write_atomic(p, b"abc")
+        write_atomic(p, b"defg")
+        self.assertEqual(open(p, "rb").read(), b"defg")
+        self.assertFalse(os.path.exists(p + ".tmp"))
+
+    def test_damaged_wrapped_key_is_recoverable(self):
+        import sys, types
+        from pa.keys import AndroidKeystoreKeyProvider, KeyUnavailable
+
+        class Fake:  # just enough of the Java classes for get_key to reach the file check
+            def __init__(self, *a, **k): pass
+            def __getattr__(self, n): return lambda *a, **k: self
+            def containsAlias(self, *a): return True
+        sys.modules["jnius"] = types.SimpleNamespace(autoclass=lambda name: Fake())
+        try:
+            p = os.path.join(tempfile.mkdtemp(), "dek.wrapped")
+            open(p, "wb").write(b"\x00" * 5)                         # half-written file
+            with self.assertRaises(KeyUnavailable) as cm:
+                AndroidKeystoreKeyProvider(p).get_key()
+            self.assertTrue(cm.exception.recoverable)
+            self.assertIn("damaged", str(cm.exception))
+        finally:
+            del sys.modules["jnius"]
+
+
+class Customize(unittest.TestCase):
+    """Settings > Customize: messaging apps on the phone and what each needs."""
+
+    def test_scan_finds_messaging_apps(self):
+        from pa import messaging
+        pkgs = ["com.whatsapp", "com.instagram.android", "com.facebook.katana", "org.telegram.messenger",
+                "com.android.chrome"]
+        apps = messaging.scan(pkgs, default_sms="com.android.mms")
+        self.assertEqual([a["id"] for a in apps], ["sms", "whatsapp", "instagram", "facebook", "telegram"])
+        self.assertEqual(messaging.scan([], None), [])
+
+    def test_requirements_and_status(self):
+        from pa import messaging
+        st = {"perms": {messaging.READ_CONTACTS: True, messaging.SEND_SMS: False}, "auto_send": False,
+              "phone_control": True, "handles": {"instagram": 1}, "installed": {"instagram"}}
+        apps = {a["id"]: a for a in messaging.scan(["com.whatsapp", "com.instagram.android", "com.facebook.katana",
+                                                     "org.telegram.messenger"], "com.android.mms")}
+        self.assertEqual(messaging.status_text(apps["sms"], st), "Setup needed (1)")        # SMS permission
+        sms = messaging.requirements("sms", st)
+        self.assertEqual(sms[0]["fix"], "perm:" + messaging.SEND_SMS)
+        self.assertEqual(messaging.status_text(apps["whatsapp"], st), "Ready")              # auto-send is optional
+        self.assertEqual(messaging.status_text(apps["instagram"], st), "Ready")
+        self.assertEqual(messaging.status_text(apps["telegram"], st), "Setup needed (1) (not tested on a phone)")
+        slack = messaging.scan(["com.Slack"])[0]
+        self.assertEqual(messaging.status_text(slack, st), "Ready (not tested on a phone)")
+        self.assertIn("by name", messaging.how_to("slack", [slack], st))
+        gmail_only = messaging.scan(["com.google.android.gm", "com.linkedin.android"])
+        self.assertEqual([a["support"] for a in gmail_only], ["supported", "supported"])
+        self.assertEqual(messaging.status_text(apps["facebook"], st), "Setup needed (1)")    # needs Messenger
+        st2 = dict(st, phone_control=False, handles={})
+        ig = messaging.requirements("instagram", st2)
+        self.assertEqual([r["fix"] for r in ig], ["phone_control", "handle_help:instagram"])
+        self.assertEqual(messaging.status_text(apps["instagram"], st2), "Setup needed (2)")
+
+    def test_not_installed_apps_are_offered(self):
+        from pa import messaging
+        miss = messaging.not_installed(["com.instagram.android", "com.whatsapp", "com.google.android.gm"])
+        ids = [a["id"] for a in miss]
+        self.assertIn("snapchat", ids)
+        self.assertIn("messenger", ids)
+        self.assertNotIn("instagram", ids)
+        self.assertIn("slack", ids)                        # now supported (by name), so offered for install
+        snap = next(a for a in miss if a["id"] == "snapchat")
+        st = {"perms": {}, "phone_control": True, "handles": {}}
+        self.assertEqual(messaging.status_text(snap, st), "Not installed")
+        reqs = messaging.requirements_for(snap, st)
+        self.assertEqual(reqs[0]["fix"], "install:com.snapchat.android")
+
+    def test_assistant_collects_the_phone_state(self):
+        apps = [{"label": "WhatsApp", "package": "com.whatsapp"}, {"label": "Instagram", "package": "com.instagram.android"}]
+        ctl = FakeControl(on=True)
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), apps=FakeApps(apps), control=ctl,
+                       contacts=FakeContacts([], perm="denied"))
+        a.handle("rahul ka instagram username rahul_23 hai")
+        found, state = a.messaging_setup()
+        self.assertEqual([x["id"] for x in found], ["whatsapp", "instagram"])
+        self.assertEqual(state["handles"], {"instagram": 1})
+        self.assertTrue(state["phone_control"])
+        from pa import messaging
+        self.assertFalse(state["perms"][messaging.READ_CONTACTS])
+
+
+class MessagingTraining(unittest.TestCase):
+    """How to use the Customize apps: more phrasings, 'how do I message on X?', Gmail."""
+    D = date(2026, 11, 28)
+
+    def v(self, text):
+        return validate(ConstrainedParser().parse(text, self.D), self.D)
+
+    def test_more_phrasings(self):
+        for text, ch, name, msg in (("rahul ko snapchat karo hi", "snapchat", "rahul", "hi"),
+                                    ("send rahul a dm on insta saying hey", "instagram", "rahul", "hey"),
+                                    ("rahul ko insta pe msg karo hello", "instagram", "rahul", "hello"),
+                                    ("rahul ko mail karo ki kal meeting hai", "email", "rahul", "kal meeting hai"),
+                                    ("send an email to rahul saying meeting at 5", "email", "rahul", "meeting at 5")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("channel"), i.entities.get("name"), i.entities.get("text")),
+                             ("send_message", ch, name, msg), text)
+        for text, app, h in (("instagram pe rahul ka username rahul_23 hai", "instagram", "rahul_23"),
+                             ("rahul ka snap rahul.snap hai", "snapchat", "rahul.snap"),
+                             ("set rahul's instagram to rahul_23", "instagram", "rahul_23"),
+                             ("rahul ka email rahul@gmail.com hai", "gmail", "rahul@gmail.com")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("app"), i.entities.get("handle")), ("save_handle", app, h), text)
+        for text, intent in (("instagram kholo", "open_app"), ("gmail kholo", "open_app"),
+                             ("send a message hi how are you to aman on whatsapp", "send_message")):
+            self.assertEqual(self.v(text).intent, intent, text)
+
+    def test_how_do_i_message(self):
+        for text, app in (("instagram pe message kaise bheju", "instagram"), ("how do I send a whatsapp message", "whatsapp"),
+                          ("gmail se mail kaise bheju", "gmail"), ("messenger kaise use karu", "messenger"),
+                          ("kaun kaun se apps se message kar sakte ho", None)):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("msg_app")), ("messaging_help", app), text)
+        apps = [{"label": "Instagram", "package": "com.instagram.android"}]
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), apps=FakeApps(apps), control=FakeControl(on=True))
+        r = a.handle("instagram pe message kaise bheju")
+        self.assertEqual(r.extra, "customize")
+        self.assertIn("[OK] Lazey phone control ON", r.text)
+        self.assertIn("[BAAKI] Kam se kam ek saved username", r.text)
+        self.assertIn("rahul ko instagram pe hi bhejo", r.text)                 # the example in Hinglish too
+        r = a.handle("how do i message on instagram")
+        self.assertIn("[MISSING] At least one saved username", r.text)
+        self.assertIn("send hi to rahul on instagram", r.text)
+        self.assertIn("install nahi hai", a.handle("snapchat pe message kaise bheju").text)
+
+    def test_gmail_opens_typed_email(self):
+        class Mail(FakeMessages):
+            def open_email(self, to, subject, body):
+                self.emails = getattr(self, "emails", []) + [(to, subject, body)]
+                return Result("handed_off", "email opened")
+        m = Mail()
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), messages=m)
+        self.assertIn("email address nahi pata", a.handle("rahul ko mail karo ki kal meeting hai").text)
+        self.assertIn("sahi email address nahi", a.handle("rahul ka email rahul@gmail hai").text)
+        self.assertIn("Saved", a.handle("rahul ka email Rahul@Gmail.com hai").text)
+        r = a.handle("rahul ko mail karo ki kal meeting hai")
+        self.assertIn("Send aap dabao", r.text)
+        self.assertEqual(m.emails, [("rahul@gmail.com", "kal meeting hai", "kal meeting hai")])
+        self.assertIn("- rahul: Gmail rahul@gmail.com", a.handle("usernames dikhao").text)
+        a.handle("rahul ko mail karo ki lazey email test")             # 'email' inside the text stays (phone test)
+        self.assertEqual(m.emails[-1][2], "lazey email test")
+        i = self.v("rahul ko instagram pe bolo ki instagram check karo")
+        self.assertEqual(i.entities.get("text"), "instagram check karo")
+        self.assertIn("Deleted", a.handle("rahul ka email hatao").text)
+
+
+class AllMessagingApps(unittest.TestCase):
+    """Telegram, Signal, LinkedIn, X, Teams, Discord, Truecaller (Slack / Google Chat: reason given)."""
+    D = date(2026, 11, 28)
+
+    def v(self, text):
+        return validate(ConstrainedParser().parse(text, self.D), self.D)
+
+    def test_save_and_send_phrases(self):
+        for text, app, h in (("rahul ka telegram username rahul_k23 hai", "telegram", "rahul_k23"),
+                             ("save rahul's signal as +919876543210", "signal", "+919876543210"),
+                             ("rahul ka linkedin rahul-sharma-12 hai", "linkedin", "rahul-sharma-12"),
+                             ("save rahul's twitter as rahul_x", "x", "rahul_x"),
+                             ("rahul ka microsoft teams rahul@corp.com hai", "teams", "rahul@corp.com"),
+                             ("rahul ka discord Rahul King hai", "discord", "rahul king")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("app"), i.entities.get("handle")), ("save_handle", app, h), text)
+        for text, ch in (("rahul ko telegram pe hi bhejo", "telegram"), ("send hi to rahul on signal", "signal"),
+                         ("rahul ko linkedin pe message karo ki hi", "linkedin"), ("rahul ko twitter pe dm karo hi", "x"),
+                         ("rahul ko microsoft teams pe hi bhejo", "teams"), ("send hi to rahul on discord", "discord"),
+                         ("rahul ko truecaller se sms karo hi", "sms")):
+            i = self.v(text)
+            self.assertEqual((i.intent, i.entities.get("channel"), i.entities.get("text")), ("send_message", ch, "hi"), text)
+        for text in ("signal nahi aa raha", "telegram kholo"):
+            self.assertNotEqual(self.v(text).intent, "send_message", text)
+
+    def test_flows(self):
+        from pa import control
+        li = control.social_steps("linkedin", "sarita", "hi")
+        self.assertEqual([s["op"] for s in li], ["open_url", "pick", "type", "click", "expect_sent"])
+        self.assertEqual(li[0]["url"], "https://www.linkedin.com/messaging/")
+        self.assertEqual((li[1]["text"], li[1]["id"]), ("sarita", "messaging_conversation_list_item_title"))
+        dc = control.social_steps("discord", "bhavya sree", "hi")
+        self.assertEqual([s["op"] for s in dc], ["open", "click", "pick", "type", "click", "expect_sent"])
+        self.assertEqual((dc[2]["text"], dc[2]["suffix"]), ("bhavya sree", " (direct message)"))
+        for app, h in (("telegram", "rahul_k23"), ("signal", "+919876543210"), ("x", "rahul"), ("teams", "a@b.co"),
+                       ("discord", "bhavya sree"), ("linkedin", "sarita sheoran")):
+            self.assertEqual(control.validate_steps(control.social_steps(app, h, "hi")), [], app)
+        bad = [dict(li[0], url="https://evil.example/")] + li[1:]
+        self.assertTrue(control.validate_steps(bad))
+        self.assertFalse(control.valid_handle("signal", "9876543210"))                # needs +country code
+
+    def test_proposal_and_customize(self):
+        apps = [{"label": "Discord", "package": "com.discord"}, {"label": "LinkedIn", "package": "com.linkedin.android"},
+                {"label": "Slack", "package": "com.Slack"}, {"label": "Truecaller", "package": "com.truecaller"}]
+        ctl = FakeControl(on=True)
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), apps=FakeApps(apps), control=ctl)
+        r = a.handle("send hi to sarita on linkedin")                  # no id needed: found by name
+        self.assertEqual(r.kind, "proposal")
+        self.assertIn('the chat named "sarita"', r.text)
+        a.approve(r.action_id, r.action_hash)
+        # two chats start with "sarita": the service stops and names them; Lazey asks which one
+        ctl.result = {"status": "failed", "step": 2, "total": 5, "detail": "CHOOSE:Sarita Sheoran|Sarita Rao", "read": []}
+        q = a.control_report()
+        self.assertEqual(q.kind, "choose")
+        self.assertEqual(q.options, ["1. Sarita Sheoran", "2. Sarita Rao"])
+        self.assertIn("Nothing was sent", q.text)                       # English task: English question
+        r2 = a.choose_contact(0)                                         # a NEW plan for exactly that chat
+        self.assertEqual(r2.kind, "proposal")
+        self.assertIn('the chat named "sarita sheoran"', r2.text)
+        a.approve(r2.action_id, r2.action_hash)
+        self.assertEqual(ctl.started[-1][1]["text"], "sarita sheoran")
+        found, state = a.messaging_setup()
+        from pa import messaging
+        st = {x["id"]: messaging.status_text(x, state) for x in found}
+        self.assertEqual(st["linkedin"], "Ready")
+        self.assertEqual(st["discord"], "Ready (not tested on a phone)")
+        self.assertEqual(st["slack"], "Ready (not tested on a phone)")
+        self.assertTrue(st["truecaller"].startswith("Setup needed"))                  # SMS permissions
+        self.assertIn("pehle se chat hai", a.handle("linkedin pe message kaise bheju").text)
+        self.assertIn("already have a LinkedIn chat", a.handle("how do i message on linkedin").text)
+
+
+class VoiceOfflineOnly(unittest.TestCase):
+    def test_online_choice_is_gone(self):
+        import json
+        from pa import voice as V
+        p = os.path.join(tempfile.mkdtemp(), "voice.json")
+        with open(p, "w") as f:
+            json.dump({"prefer_offline": False, "speak_mode": "always"}, f)   # saved by an older version
+        s = V.load_settings(p)
+        self.assertTrue(s.prefer_offline)          # an old "Allow online" is ignored
+        self.assertEqual(s.speak_mode, "always")   # other settings are kept
+
+
+class BuiltinVoicePack(unittest.TestCase):
+    """Lazey's own voice pack (Vosk + Indian English model inside the APK)."""
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def voice(self):
+        from pa.adapters.voice_android import AndroidVoice
+        events = []
+        v = AndroidVoice(lambda k, x: events.append((k, x)))
+        calls = []
+
+        class FakeEngine:   # stands in for org.pa.assistant.VoskEngine
+            @staticmethod
+            def load(_act, cb):
+                calls.append("load")
+
+            @staticmethod
+            def start(cb):
+                calls.append("start")
+                return True
+
+            @staticmethod
+            def stop():
+                calls.append("stop")
+
+            @staticmethod
+            def cancel():
+                calls.append("cancel")
+        v._vosk = lambda: FakeEngine
+        return v, events, calls
+
+    def test_settings_default_and_bad_values(self):
+        import json
+        from pa import voice as V
+        self.assertEqual(V.VoiceSettings().engine, "builtin")
+        p = os.path.join(tempfile.mkdtemp(), "voice.json")
+        with open(p, "w") as f:
+            json.dump({"engine": "cloud"}, f)
+        self.assertEqual(V.load_settings(p).engine, "builtin")
+        s = V.VoiceSettings()
+        s.engine = "phone"
+        V.save_settings(p, s)
+        self.assertEqual(V.load_settings(p).engine, "phone")
+
+    def test_first_tap_waits_for_the_pack_then_listens(self):
+        v, events, calls = self.voice()
+        v.start_listening(True)
+        self.assertTrue(v.is_listening())
+        self.assertEqual(events[-1][0], "loading")
+        v._on_builtin_loaded("loaded", "")          # model ready (main thread in the app)
+        self.assertEqual(v.builtin_state, "ready")
+        self.assertIn("start", calls)
+        v._on_builtin_turn("ready", "")
+        v._on_builtin_turn("partial", "call mum")
+        v._on_builtin_turn("final", "call mummy")
+        kinds = [k for k, _ in events]
+        self.assertEqual(kinds[-3:], ["ready", "partial", "final"])
+        self.assertEqual(events[-1][1], "call mummy")
+        self.assertFalse(v.is_listening())
+
+    def test_silence_and_errors(self):
+        v, events, _ = self.voice()
+        v.builtin_state = "ready"
+        v.start_listening(True)
+        v._on_builtin_turn("nospeech", "")
+        self.assertEqual(events[-1], ("nospeech", None))
+        v.start_listening(True)
+        v._on_builtin_turn("final", "")              # stopped before any word
+        self.assertEqual(events[-1], ("nospeech", None))
+        v.start_listening(True)
+        v._on_builtin_turn("error", "mic:Failed to initialize recorder")
+        self.assertEqual(events[-1][0], "error")
+        self.assertIn("microphone", events[-1][1])
+        self.assertFalse(v.is_listening())
+
+    def test_load_failure_is_reported_once_per_tap(self):
+        v, events, _ = self.voice()
+        v.start_listening(True)
+        v._on_builtin_loaded("load_error", "copy: No space left on device")
+        self.assertEqual(events[-1][0], "error")
+        self.assertIn("No space left", events[-1][1])
+        self.assertFalse(v.is_listening())
+        v.start_listening(True)                      # next tap: says it again, does not hang
+        self.assertEqual(events[-1][0], "error")
+        self.assertIn("could not load", v.recognizer_label())
+
+    def test_stop_and_cancel(self):
+        v, events, calls = self.voice()
+        v.start_listening(True)                      # still loading
+        v.stop_listening()
+        self.assertEqual(events[-1], ("idle", None))
+        self.assertFalse(v.is_listening())
+        v._on_builtin_loaded("loaded", "")           # loaded later: must NOT start the mic now
+        self.assertNotIn("start", calls)
+        v.start_listening(True)
+        v.stop_listening()
+        self.assertEqual(calls[-1], "stop")          # the words heard so far still come as "final"
+        v._on_builtin_turn("final", "battery kitni hai")
+        self.assertEqual(events[-1], ("final", "battery kitni hai"))
+        v.start_listening(True)
+        n = len(events)
+        v._listening = True
+        v.cancel_listening()
+        v._on_builtin_turn("final", "late words")    # late event after cancel: ignored
+        self.assertNotIn(("final", "late words"), events[n:])
+
+    def test_phone_engine_still_available(self):
+        v, events, _ = self.voice()
+        v.engine = "phone"
+        self.assertNotIn("voice pack", v.recognizer_label())
+        v.engine = "builtin"
+        self.assertIn("Lazey voice pack", v.recognizer_label())
+
+    def test_model_is_packed_into_the_apk(self):
+        model = os.path.join(self.ROOT, "vosk_model")
+        for f in ("am/final.mdl", "conf/model.conf", "conf/mfcc.conf", "graph/Gr.fst", "graph/HCLr.fst",
+                  "graph/phones/word_boundary.int", "ivector/final.ie", "uuid"):
+            self.assertTrue(os.path.isfile(os.path.join(model, f)), f)
+        with open(os.path.join(model, "uuid")) as f:
+            uuid = f.read().strip()
+        with open(os.path.join(self.ROOT, "docker", "get-voice-model.sh")) as f:
+            self.assertIn("NAME=" + uuid, f.read())
+        with open(os.path.join(self.ROOT, "buildozer.spec")) as f:
+            spec = f.read()
+        self.assertIn("android.add_assets = vosk_model:model-en-in", spec)
+        self.assertIn("com.alphacephei:vosk-android:", spec)
+        self.assertIn("net.java.dev.jna:jna:", spec)
+        excl = next(l for l in spec.splitlines() if l.startswith("source.exclude_dirs"))
+        self.assertIn("vosk_model", excl)            # not a second copy inside the Python bundle
+        with open(os.path.join(self.ROOT, "java", "org", "pa", "assistant", "VoskEngine.java")) as f:
+            java = f.read()
+        self.assertIn('ASSET = "model-en-in"', java)
+
+    def test_hook_keeps_only_built_abis(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("p4a_hook", os.path.join(self.ROOT, "p4a_hook.py"))
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "libs", "arm64-v8a"))
+        with open(os.path.join(d, "build.gradle"), "w") as f:
+            f.write("android {\n    defaultConfig {\n        minSdkVersion 29\n    }\n}\n")
+        old = os.getcwd()
+        try:
+            os.chdir(d)
+            hook._keep_only_built_abis()
+            hook._keep_only_built_abis()             # twice: added once
+        finally:
+            os.chdir(old)
+        with open(os.path.join(d, "build.gradle")) as f:
+            g = f.read()
+        self.assertEqual(g.count("abiFilters 'arm64-v8a'"), 1)
+
+
+class VoicePackFixes(unittest.TestCase):
+    """pa/voice_fix.py: words the built-in voice pack does not know (heard forms from real runs)."""
+
+    def parse(self, text):
+        return ConstrainedParser().parse(text, date(2026, 11, 28))
+
+    def test_misheard_commands_are_understood(self):
+        from pa.voice_fix import normalize
+        cases = [
+            ("battery kidney", "device_info"), ("battery kick me here", "device_info"),
+            ("open what's up", "open_app"), ("oh what's up", "open_app"), ("the open youtube", "open_app"),
+            ("youtube galore", "open_app"), ("why fi on caro", "change_setting"),
+            ("why five on or", "change_setting"), ("turn off wife i", "change_setting"),
+            ("turn off my fi", "change_setting"), ("ravel go call caro", "call_contact"),
+            ("call mum me", "call_contact"), ("what is the day today", "device_info"),
+        ]
+        for heard, intent in cases:
+            self.assertEqual(self.parse(normalize(heard))["intent"], intent, heard)
+        self.assertEqual(normalize("send hi to rule on what's up"), "send hi to rule on whatsapp")
+        self.assertEqual(normalize("send hi to sit on share or run on lint din"),
+                         "send hi to sit on share or run on linkedin")
+        r = self.parse(normalize("mummy core message car or key man late him"))
+        self.assertEqual((r["intent"], r["entities"]["name"]), ("send_message", "mummy"))
+        self.assertEqual(self.parse(normalize("call mum me"))["entities"]["name"], "mummy")
+
+    def test_plain_english_is_left_alone(self):
+        from pa.voice_fix import normalize
+        for t in ("what can you do", "set an alarm for six thirty", "remind me tomorrow at five",
+                  "make a note buy milk", "send hi to rahul on whatsapp", "let's go call mummy",
+                  "what's up", "tell me what's up with my tasks", "i want to go home",
+                  "send hi to rahul saying the core team is ready", "play music", "open camera"):
+            self.assertEqual(normalize(t), t, t)
+
+    def test_only_builtin_engine_text_is_fixed(self):
+        from pa.adapters.voice_android import AndroidVoice
+        events = []
+        v = AndroidVoice(lambda k, x: events.append((k, x)))
+        v._listening = True
+        v._on_builtin_turn("final", "battery kidney")
+        self.assertEqual(events[-1], ("final", "battery kitni hai"))
+
+
+class LinkedInSpellings(unittest.TestCase):
+    """People type LinkedIn as linkedln (L for i), linkden, linkdin...: all must reach LinkedIn."""
+
+    def test_spellings(self):
+        P = ConstrainedParser()
+        for word in ("linkedin", "linked in", "linkedln", "Linkedln", "linkden", "linkdin", "linkedn", "linkeden"):
+            r = P.parse("send hi to pratham kumar on %s" % word, date(2026, 11, 28))
+            self.assertEqual((r["intent"], r["entities"].get("channel"), r["entities"].get("name")),
+                             ("send_message", "linkedin", "pratham kumar"), word)
+        r = P.parse("pratham kumar ko linkedln pe hi bhejo", date(2026, 11, 28))
+        self.assertEqual(r["entities"].get("channel"), "linkedin")
+        r = P.parse("linkedln pe message kaise bheju", date(2026, 11, 28))
+        self.assertEqual((r["intent"], r["entities"].get("msg_app")), ("messaging_help", "linkedin"))
+
+    def test_link_is_not_linkedin(self):
+        r = ConstrainedParser().parse("send the link in whatsapp to rahul", date(2026, 11, 28))
+        self.assertEqual(r["entities"].get("channel"), "whatsapp")
+
+
+class ReplyLanguage(unittest.TestCase):
+    """English task -> English reply, Hinglish task -> Hinglish reply (pa/lang.py)."""
+    CORPUS = [  # the same task in English and in Hinglish
+        ("hello", "namaste kaise ho"), ("what can you do", "tum kya kya kar sakte ho"),
+        ("how much battery is left", "battery kitni hai"), ("how much storage is left", "storage kitna bacha hai"),
+        ("what time is it", "kitne baje hain"), ("when is my next alarm", "agla alarm kab hai"),
+        ("set an alarm for 6 am", "subah 6 baje ka alarm lagao"), ("set a timer for 10 minutes", "10 minute ka timer lagao"),
+        ("set an alarm", "alarm lagao"),
+        ("remind me tomorrow at 5 pm to pay the bill", "kal shaam 5 baje yaad dilana ki bill bharna hai"),
+        ("show my todos", "mere todo dikhao"), ("what is the plan for today", "aaj ka plan kya hai"),
+        ("remember that I like to work in the morning", "yaad rakho mujhe subah kaam karna pasand hai"),
+        ("call mummy", "mummy ko call karo"), ("call rahul", "rahul ko call karo"), ("call zzqx", "zzqx ko call karo"),
+        ("call neha on whatsapp", "neha ko whatsapp pe call karo"),
+        ("send hi to neha on whatsapp", "neha ko whatsapp pe hi bhejo"),
+        ("send a message", "message bhejo"), ("send sms to zzqx saying hello", "zzqx ko sms karo ki hello"),
+        ("open youtube", "youtube kholo"), ("open zzqx", "zzqx kholo"),
+        ("open youtube then search lofi", "youtube kholo phir lofi search karo"),
+        ("save rahul's instagram as rahul_23", "rahul ka instagram username rahul_23 hai"),
+        ("send hi to pratham kumar on linkedin", "pratham kumar ko linkedin pe hi bhejo"),
+        ("how do i message on instagram", "instagram pe message kaise bheju"),
+        ("show today's photos", "aaj ki photos dikhao"),
+        ("send good morning to mummy every day at 8 am", "har subah 8 baje mummy ko good morning message karo"),
+        ("find 45 minutes tomorrow to work on the project", "kal project par 45 minutes kaam karne ka time nikalo"),
+        ("blah blah qwerty", "kuch bhi bakwas qwerty karo"), ("thank you", "shukriya ji"),
+    ]
+
+    def mk(self):
+        apps = APPS + [{"label": "YouTube", "package": "com.google.android.youtube"},
+                       {"label": "Instagram", "package": "com.instagram.android"},
+                       {"label": "LinkedIn", "package": "com.linkedin.android"}]
+        a, _, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), cal=FakeCalendar(busy=[]),
+                       contacts=FakeContacts(DAILY_BOOK), phone=FakePhone(), daily=FakeDaily(), apps=FakeApps(apps),
+                       alarms=FakeAlarms(), device=FakeDevice(battery=15), messages=FakeMessages(),
+                       control=FakeControl(True), photos=FakePhotos(PICS))
+        return a
+
+    @staticmethod
+    def wrong_lines(text, want):
+        """Lines in the other language (quoted message texts do not count)."""
+        import re
+        from pa import lang as L
+        bad = []
+        for line in text.split("\n"):
+            w = L._words(re.sub(r"\"[^\"]*\"|'[^']*'", " ", line))
+            hi, en = [x for x in w if x in L.HI_WORDS], [x for x in w if x in L.EN_WORDS]
+            if (want == "en" and hi) or (want == "hi" and len(en) >= 3 and not hi):
+                bad.append(line)
+        return bad
+
+    def test_detect(self):
+        from pa.lang import detect
+        for t in ("call mummy", "open youtube", "what is my battery", "send hi to rahul on whatsapp",
+                  "remind me at 6 pm to drink water", "how do i message on instagram"):
+            self.assertEqual(detect(t, "hi"), "en", t)
+        for t in ("rahul ko call karo", "youtube kholo", "battery kitni hai", "kal 5 baje yaad dilana",
+                  "linkedin pe message kaise bheju", "haan", "nahi"):
+            self.assertEqual(detect(t, "en"), "hi", t)
+        for t in ("yes", "2", "5 pm", "whatsapp", "ok", "Rahul Sharma"):   # no language of their own
+            self.assertEqual(detect(t, "hi"), "hi", t)
+            self.assertEqual(detect(t, "en"), "en", t)
+
+    def test_every_reply_in_the_task_language(self):
+        for en, hi in self.CORPUS:
+            for cmd, want in ((en, "en"), (hi, "hi")):
+                a = self.mk()
+                r = a.handle(cmd)
+                self.assertEqual(a.lang, want, cmd)
+                for t in [r.text] + list(r.options or []):
+                    self.assertEqual(self.wrong_lines(t, want), [], "%s -> %s" % (cmd, t))
+
+    def test_message_text_does_not_decide(self):
+        a = self.mk()
+        r = a.handle("send sms to neha saying main late hoon")    # English task, Hinglish message
+        self.assertEqual(a.lang, "en")
+        self.assertIn('"main late hoon"', r.text)                 # the message itself is never changed
+        self.assertIn("Approve?", r.text)
+        r = a.handle("mummy ko message bhejo")                     # Hinglish: asks in Hinglish
+        self.assertEqual(a.lang, "hi")
+        self.assertIn("kya likhun", r.text)
+        a.handle("I will be late today")                           # the answer IS the message: stays Hinglish
+        self.assertEqual(a.lang, "hi")
+
+    def test_quoted_text_and_numbers_kept(self):
+        from pa.lang import localize
+        card = 'Proposal: send on LinkedIn to the chat named "open whatsapp":\n"battery kitni hai"\nApprove?'
+        out = localize(card, "hi")
+        self.assertIn('"open whatsapp"', out)
+        self.assertIn('"battery kitni hai"', out)
+        self.assertEqual(localize(out, "hi"), out)                 # translating twice changes nothing
+        self.assertEqual(localize(localize(out, "en"), "hi"), out)
+
+    def test_example_commands_mean_the_same(self):
+        from pa.lang import COMMANDS
+        P, d = ConstrainedParser(), date(2026, 11, 28)
+        for en, hi in COMMANDS:
+            a, b = P.parse(en, d), P.parse(hi, d)
+            self.assertNotEqual(a["intent"], "unknown", en)
+            self.assertEqual(a["intent"], b["intent"], "%s | %s" % (en, hi))
+
+    def test_phone_control_reasons(self):
+        from pa.lang import localize
+        self.assertEqual(localize('Stopped at step 2 of 5: no chat named "hay" in the list on the screen, so nothing '
+                                  'was sent.', "hi"),
+                         'Step 2 (kul 5) par ruk gaya: screen ki list mein "hay" naam ki chat nahi mili, isliye kuch '
+                         'nahi bheja.')
+
+
+class Automations(unittest.TestCase):
+    """Menu > Automations: reminders, app automations, daily messages, timed routines."""
+    D = date(2026, 11, 28)
+    APPS = [{"label": "YouTube", "package": "com.google.android.youtube"},
+            {"label": "WhatsApp", "package": "com.whatsapp"},
+            {"label": "Instagram", "package": "com.instagram.android"},
+            {"label": "Settings", "package": "com.android.settings"}]
+
+    def mk(self, on=True, missing=()):
+        self.daily, self.ctl, self.apps = FakeDaily(missing), FakeControl(on), FakeApps(self.APPS)
+        a, self.store, _ = make(os.path.join(tempfile.mkdtemp(), "a.db"), contacts=FakeContacts(DAILY_BOOK),
+                                daily=self.daily, control=self.ctl, apps=self.apps, device=FakeDevice())
+        return a
+
+    def test_parse(self):
+        P = ConstrainedParser()
+        cases = {
+            "daily subah 9 baje mujhe padhna hai": ("schedule_notice", {"text": "padhna hai", "time": "09:00"}),
+            "har din 9 baje yaad dilana ki padhna hai": ("schedule_notice", {"text": "padhna hai", "time": "09:00"}),
+            "remind me every day at 9 am to study": ("schedule_notice", {"text": "study", "time": "09:00"}),
+            "weekdays 7 baje gym ka reminder": ("schedule_notice", {"text": "gym", "time": "07:00",
+                                                                     "days": [2, 3, 4, 5, 6]}),
+            "har din subah 7 baje youtube kholo phir lofi search karo": (
+                "schedule_task", {"command": "youtube kholo phir lofi search karo", "time": "07:00"}),
+            "every day at 7 am open youtube then search lofi": (
+                "schedule_task", {"command": "open youtube then search lofi", "time": "07:00"}),
+            "every monday at 10 am open linkedin": ("schedule_task", {"command": "open linkedin", "time": "10:00",
+                                                                      "days": [2]}),
+            "har subah 8 baje aaj ka plan batao": ("schedule_task", {"command": "aaj ka plan batao", "time": "08:00"}),
+            "rahul ko daily subah 4 baje sms karna hai ki good morning": (
+                "schedule_message", {"name": "rahul", "text": "good morning", "time": "04:00", "channel": "sms"}),
+            "roz 9 baje rahul ko instagram pe good morning bhejo": (
+                "schedule_message", {"name": "rahul", "text": "good morning", "time": "09:00", "channel": "instagram"}),
+            "automations dikhao": ("list_automations", {}),
+            "show my automations": ("list_automations", {}),
+            # unchanged: alarms, timed routines, one-time reminders
+            "har din 6 baje ka alarm": ("set_alarm", {"time": "06:00"}),
+            "good morning routine har din 7 baje": ("schedule_routine", {"name": "good morning", "time": "07:00"}),
+            "kal 5 baje yaad dilana ki bill bharna hai": ("add_todo", {"text": "bill bharna hai", "time": "17:00"}),
+        }
+        for text, (intent, want) in cases.items():
+            it = validate(P.parse(text, self.D), self.D)
+            self.assertEqual(it.intent, intent, text)
+            for k, v in want.items():
+                self.assertEqual(it.entities.get(k), v, "%s: %s" % (text, k))
+
+    def test_daily_reminder(self):
+        a = self.mk()
+        r = a.handle("daily subah 9 baje mujhe padhna hai")
+        self.assertEqual(r.kind, "info")
+        self.assertIn('"padhna hai"', r.text)
+        self.assertIn("Menu > Automations", r.text)
+        (sid, saved), = self.daily.saved.items()
+        self.assertEqual(saved, {"notice": "padhna hai", "time": "09:00", "days": None})
+        items = a.list_automations()
+        self.assertEqual([(x["time"], x["what"], x["how"]) for x in items],
+                         [("09:00", 'Reminder: "padhna hai"', "Notification")])
+        self.assertEqual(a.handle("every day remind me to drink water").kind, "need_info")   # no time
+        a2 = self.mk(missing=["android.permission.POST_NOTIFICATIONS"])
+        self.assertEqual(a2.handle("remind me every day at 9 am to study").kind, "need_permission")
+
+    def test_app_automation_is_approved_once_then_runs_on_tap(self):
+        a = self.mk()
+        r = a.handle("har din subah 7 baje youtube kholo phir lofi search karo")
+        self.assertEqual(r.kind, "proposal")
+        self.assertIn("1. YouTube kholna", r.text)                       # Hinglish task, Hinglish card
+        self.assertIn('2. "lofi" search karna', r.text)
+        self.assertEqual(self.daily.saved, {})                            # nothing before Approve
+        self.assertIn("Automation save ho gaya", a.approve(r.action_id, r.action_hash).text)
+        rec, = self.store.all("automation")
+        self.assertEqual(rec["steps"][0]["package"], "com.google.android.youtube")
+        self.assertEqual(self.daily.saved[rec["sched_id"]]["time"], "07:00")
+        self.assertEqual(self.ctl.started, [])                            # runs only when tapped
+        r = a.run_automation(rec["sched_id"])
+        self.assertEqual(self.ctl.started, [rec["steps"]])
+        self.assertIn("Automation chala raha hoon", r.text)
+        self.ctl.on = False                                               # phone control switched off since
+        self.assertEqual(a.run_automation(rec["sched_id"]).extra, "control_setup")
+        self.assertIn("delete ho chuka hai", a.run_automation(12345).text)
+
+    def test_open_app_and_status_run_the_command(self):
+        a = self.mk()
+        r = a.handle("every day at 8 pm open youtube")
+        self.assertIn('"open youtube"', r.text)
+        a.approve(r.action_id, r.action_hash)
+        rec, = self.store.all("automation")
+        self.assertNotIn("steps", rec)
+        a.run_automation(rec["sched_id"])
+        self.assertEqual(self.apps.opened, ["com.google.android.youtube"])
+        self.assertEqual(self.ctl.started, [])                            # opening an app needs no phone control
+
+    def test_instagram_daily_message(self):
+        a = self.mk()
+        a.handle("rahul ka instagram username rahul_23 hai")
+        r = a.handle("roz 9 baje rahul ko instagram pe good morning bhejo")
+        self.assertEqual(r.kind, "proposal")
+        self.assertIn("Automation har din 09:00 baje", r.text)
+        a.approve(r.action_id, r.action_hash)
+        rec, = self.store.all("automation")
+        self.assertTrue(any(s.get("handle") == "rahul_23" for s in rec["steps"]))
+        self.assertTrue(any(s.get("text") == "good morning" for s in rec["steps"]))
+
+    def test_settings_app_stays_blocked(self):
+        a = self.mk()
+        r = a.handle("har din 9 baje settings kholo phir wifi pe click karo")
+        self.assertEqual(r.kind, "unsupported")
+        self.assertEqual(self.store.all("automation"), [])
+
+    def test_daily_sms_shows_in_automations_and_delete(self):
+        a = self.mk()
+        r = a.handle("mummy ko daily subah 4 baje sms karna hai ki good morning")
+        self.assertEqual(r.kind, "proposal")
+        a.approve(r.action_id, r.action_hash)
+        a.handle("daily subah 9 baje mujhe padhna hai")
+        items = a.list_automations()
+        self.assertEqual([x["time"] for x in items], ["04:00", "09:00"])   # sorted by time
+        self.assertEqual(items[0]["how"], "SMS, sent by itself")
+        for x in items:
+            self.assertTrue(a.delete_automation(x["src"], x["id"]))
+        self.assertEqual(a.list_automations(), [])
+        self.assertEqual(self.daily.saved, {})                            # the alarms are gone too
+
+    def test_lost_alarms_come_back(self):
+        a = self.mk()
+        a.handle("daily subah 9 baje mujhe padhna hai")
+        r = a.handle("every day at 8 pm open youtube")
+        a.approve(r.action_id, r.action_hash)
+        self.daily.saved.clear()                                          # app force-stopped: alarms lost
+        a.resume_schedules()
+        self.assertEqual(sorted(v.get("time") for v in self.daily.saved.values()), ["09:00", "20:00"])
+
+    def test_list_in_chat(self):
+        a = self.mk()
+        r = a.handle("automations dikhao")
+        self.assertEqual(r.extra, "automations")
+        self.assertIn("Abhi koi automation nahi hai", r.text)
+        a.handle("remind me every day at 9 am to study")
+        r = a.handle("show my automations")
+        self.assertIn('- every day at 09:00: Reminder: "study"', r.text)
 
 
 if __name__ == "__main__":

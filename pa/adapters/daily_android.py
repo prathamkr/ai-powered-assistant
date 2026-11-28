@@ -136,6 +136,22 @@ class AndroidDailyAdapter(Adapter):
         ok = self._java().saveRoutine(au.mActivity, int(sched_id), name, h, m, days_mask(days))
         return Result("done", "routine scheduled") if ok else Result("failed", "could not schedule the routine")
 
+    def set_notice(self, sched_id, text, time, days=None):
+        """Automation: a reminder notification every day / on some weekdays."""
+        if needed_permissions("whatsapp"):  # only the notification permission matters here
+            return Result("denied", "notification permission missing")
+        h, m = (int(x) for x in time.split(":"))
+        ok = self._java().saveNotice(au.mActivity, int(sched_id), str(text), h, m, days_mask(days))
+        return Result("done", "notice scheduled") if ok else Result("failed", "could not save the automation")
+
+    def set_automation(self, sched_id, label, time, days=None):
+        """Automation: 'Automation: label - tap to run' at the time; the app then runs it."""
+        if needed_permissions("whatsapp"):
+            return Result("denied", "notification permission missing")
+        h, m = (int(x) for x in time.split(":"))
+        ok = self._java().saveAutomation(au.mActivity, int(sched_id), str(label), h, m, days_mask(days))
+        return Result("done", "automation scheduled") if ok else Result("failed", "could not save the automation")
+
     def set_reminder(self, rid, text, at_ms):
         """One-time notification at at_ms (epoch milliseconds)."""
         if needed_permissions("whatsapp"):  # only the notification permission matters here

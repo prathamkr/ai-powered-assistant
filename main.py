@@ -7,6 +7,7 @@ status, battery exemption) come from main. The assistant core is pa/.
 """
 import os
 import threading
+import time
 
 from kivy.config import Config
 
@@ -21,16 +22,21 @@ from kivy.uix.label import Label  # noqa: E402
 from kivy.uix.popup import Popup  # noqa: E402
 from kivy.uix.scrollview import ScrollView  # noqa: E402
 from kivy.uix.textinput import TextInput  # noqa: E402
+from kivy.uix.widget import Widget  # noqa: E402
 
 from pa import voice as V  # noqa: E402
 from pa.adapters import android_util as au  # noqa: E402
 from pa.adapters.daily_android import days_text  # noqa: E402
 from pa.adapters.voice_android import AndroidVoice  # noqa: E402
-from pa.bootstrap import KeyUnavailable, build_assistant  # noqa: E402
+from pa.bootstrap import KeyUnavailable, build_assistant, reset_encrypted_store  # noqa: E402
+from pa.keys import short_error  # noqa: E402
 from pa_ui.calendar_view import CalendarView  # noqa: E402
 from pa_ui.chrome import Chrome  # noqa: E402
+from pa_ui import fonts  # noqa: E402
 from pa_ui.config import APP_NAME, ConfigStore  # noqa: E402
-from pa_ui.lazey_widgets import Bubble  # noqa: E402
+from pa_ui.iconset import glyph  # noqa: E402
+from pa import messaging  # noqa: E402
+from pa_ui.lazey_widgets import Bubble, DayChip, Typing  # noqa: E402
 from pa_ui.quick_view import QuickPromptsView  # noqa: E402
 from pa_ui.widgets import Status, T, ThemedButton, style_input, style_label, style_popup, surface  # noqa: E402
 
@@ -52,6 +58,8 @@ class AssistantApp(App):
         self.asst = None
         self.pending = None  # (action_id, hash) of the proposal currently on screen
         self.working = False
+        self._typing = None    # the "..." bubble while a reply is being worked out
+        self._last_day = None  # (y, m, d) of the last message shown, for the Today / Yesterday chips
 
         self.status = Status()  # what the assistant is doing; not shown on screen
 
@@ -100,6 +108,7 @@ class AssistantApp(App):
         self._kb_watch_until = Clock.get_time() + 2.0
         self.entry.bind(focus=lambda *_: setattr(self, "_kb_watch_until", Clock.get_time() + 2.0))
         Clock.schedule_interval(self.track_keyboard, 0.15)
+        Clock.schedule_interval(self.test_commands, 1.0)   # device tests only (see test_commands)
         return root
 
     def keyboard_px(self):
@@ -134,6 +143,27 @@ class AssistantApp(App):
             self.chrome.set_keyboard(kb)
             self.scroll_bottom()  # keep the newest message visible above the input
 
+    def reset_store(self):
+        """'Reset Lazey' after an unrecoverable key error: two taps, then a fresh encrypted store."""
+        if not getattr(self, "_reset_armed", False):
+            self._reset_armed = True
+            self.say("Pakka? Dobara 'Reset Lazey' dabao.", "sys", save=False)
+            return
+        self._reset_armed = False
+        try:
+            moved = reset_encrypted_store(self.user_data_dir)
+        except Exception as e:
+            self.say("Reset nahi ho paya: %s" % short_error(e), "sys", save=False)
+            return
+        self.say("Reset ho gaya (%s alag rakhe gaye). Lazey phir se shuru ho raha hai..." % (", ".join(moved) or "kuch nahi"),
+                 "sys", save=False)
+        def restart(*_):
+            self.on_start()
+            if self.asst is not None:
+                self.set_input(True)
+                self.say("Lazey ready hai.", "sys", save=False)
+        Clock.schedule_once(restart, 0.5)
+
     # ---------- startup ----------
     def on_start(self):
         self.request_calendar_permission()
@@ -142,16 +172,25 @@ class AssistantApp(App):
         except KeyUnavailable as e:
             self.set_input(False)
             self.status.text = "BLOCKED: no encryption key"
-            self.say("No key was found for encrypted storage, so the app cannot open your data "
-                     "(there is no plaintext fallback). Detail: %s" % e, "sys")
+            if getattr(e, "recoverable", False):
+                # the saved key data is damaged or its Keystore key is gone: the old data can never be read
+                # again. Offer a fresh start instead of leaving the app stuck for good.
+                self.say("Lazey apna encrypted data nahi khol pa raha (%s). Purana data wapas nahi aa sakta. "
+                         "'Reset Lazey' dabao to naya shuru hoga (purani files hatayi nahi jaati, alag rakh "
+                         "di jaati hain)." % e, "sys", save=False)
+                self.button_list([("Reset Lazey", self.reset_store)], accent=True, icon="trash", keep=True)
+            else:
+                self.say("No key was found for encrypted storage, so the app cannot open your data "
+                         "(there is no plaintext fallback). Detail: %s" % e, "sys", save=False)
             return
-        except Exception as e:  # keep the UI alive and honest
+        except Exception as e:  # keep the UI alive and honest (one line, not a Java stack trace)
             self.set_input(False)
             self.status.text = "ERROR"
-            self.say("Startup failed: %s: %s" % (type(e).__name__, e), "sys")
+            self.say("Startup failed: %s" % short_error(e), "sys", save=False)
             return
         self.vset = V.load_settings(self.voice_path())
-        if self.voice.available():
+        self.voice.engine = self.vset.engine
+        if self.voice.available() and self.vset.engine == "phone":
             self.voice.check_offline()  # learn which offline speech pack is installed before the first Mic tap
         # Daily messages / reminders / timed routines: alarms are lost after a force-stop; set them again.
         self.run_bg(self.asst.resume_schedules, lambda res: res if not isinstance(res, Exception)
@@ -164,11 +203,14 @@ class AssistantApp(App):
             history = []
         for h in history:
             text = h["text"][2:] if h["who"] == "user" and h["text"].startswith("> ") else h["text"]
-            self.log.add_widget(Bubble(text, h["who"]))
+            self.add_bubble(text, h["who"], h.get("created_at"))
         self.chrome.refresh_hero()  # the greeting shows only while the chat is empty
         self.scroll_bottom()
-        # timed routines: a tapped "Routine: X" notification is picked up here and in on_resume
+        # timed routines / automations: a tapped "tap to run" notification is picked up here and in on_resume,
+        # and when the window gets focus back: tapped while Lazey was already on screen (notification shade
+        # over it), Android gives no pause/resume, only focus (seen on the Samsung A35)
         Clock.schedule_once(lambda *_: self.run_tapped_routine(), 1.0)
+        Window.bind(focus=lambda _w, has: has and Clock.schedule_once(lambda *_: self.run_tapped_routine(), 0.3))
         Clock.schedule_once(lambda *_: self.check_auto_send(), 1.5)
 
     def request_calendar_permission(self):
@@ -187,8 +229,57 @@ class AssistantApp(App):
             pass  # desktop
 
     # ---------- helpers ----------
+    def test_log(self, kind, text):
+        """Device tests only: when the file LAZEY_TEST_LOG exists in the app's private folder (it can be
+        created only with `adb shell run-as`, i.e. on a debug build), every chat line and card is also
+        written to logcat so a script can check the replies. Without that file nothing is logged."""
+        try:
+            if os.path.exists(os.path.join(self.user_data_dir, "LAZEY_TEST_LOG")):
+                print("LAZEY_TEST|%s|%s" % (kind, str(text).replace("\n", " / ")), flush=True)
+        except Exception:
+            pass
+
+    def add_bubble(self, text, who, ts=None):
+        """A message bubble, with a 'Today' / 'Yesterday' / date chip when the day changes."""
+        ts = ts or time.time()
+        day = time.localtime(ts)[:3]
+        if day != self._last_day:
+            self.log.add_widget(DayChip(ts))
+            self._last_day = day
+        self.log.add_widget(Bubble(text, who, ts=ts))
+
+    def show_typing(self, on):
+        if on and self._typing is None:
+            self._typing = Typing()
+            self.log.add_widget(self._typing)
+            self.scroll_bottom()
+        elif not on and self._typing is not None:
+            self._typing.stop()
+            self.log.remove_widget(self._typing)
+            self._typing = None
+
+    def test_commands(self, *_):
+        """Device tests only (same LAZEY_TEST_LOG switch): a command written to LAZEY_TEST_CMD is run as
+        if typed, so a script can drive the app on any screen size (tablet taskbars and foldable
+        letterboxes made screen taps miss the input box). Without LAZEY_TEST_LOG nothing happens."""
+        try:
+            d = self.user_data_dir
+            p = os.path.join(d, "LAZEY_TEST_CMD")
+            if self.working or not os.path.exists(os.path.join(d, "LAZEY_TEST_LOG")) or not os.path.exists(p):
+                return
+            with open(p) as f:
+                cmd = f.read().strip()
+            os.remove(p)
+            if cmd:
+                self.send_text(cmd)
+        except Exception:
+            pass
+
     def say(self, text, who="bot", save=True):
-        self.log.add_widget(Bubble(text, who))
+        if who in ("bot", "sys") and self.asst is not None:
+            text = self.asst.tr(text)   # same language as the user's last task (pa/lang.py)
+        self.test_log(who, text)
+        self.add_bubble(text, who)
         self.chrome.refresh_hero()
         self.scroll_bottom()
         if save and self.asst is not None:
@@ -207,8 +298,15 @@ class AssistantApp(App):
         self.chrome.set_input_enabled(on)
 
     def show_card(self, text):
+        self.test_log("card", text)
         self.card_text.text = text
-        self.card.height, self.card.opacity = dp(150), 1
+        # tall enough for EVERY line of the proposal (a fixed 150 dp cut off step 4 of a phone-control
+        # plan on the phone: the user must see all of it before Approve), at most 60% of the screen
+        w = max(self.card.width or Window.width, dp(200)) - dp(28)
+        self.card_text.text_size = (w, None)
+        self.card_text.texture_update()
+        need = self.card_text.texture_size[1] + dp(44) + dp(36)  # text + buttons + padding
+        self.card.height, self.card.opacity = min(max(dp(150), need), Window.height * 0.6), 1
         self.approve_btn.disabled = self.reject_btn.disabled = False
 
     def hide_card(self):
@@ -231,7 +329,11 @@ class AssistantApp(App):
         if self.asst is None:
             return
         name = getattr(self.asst.daily, "take_routine_tap", lambda: None)()
-        if name:
+        if name and name.startswith("auto:") and name[5:].isdigit():   # an automation's notification
+            self.say("(Started from the automation notification)", "sys")
+            sid = int(name[5:])
+            self.run_bg(lambda: self.asst.run_automation(sid), self.on_reply)
+        elif name:
             self.say("(Started from the routine notification)", "sys")
             self.send_text("%s routine" % name)
 
@@ -254,17 +356,20 @@ class AssistantApp(App):
         self.entry.text = ""
         self.say(text, "user")
         self.working = True
+        self.show_typing(True)
         self.set_input(False)
         self.status.text = "thinking..."
         self.run_bg(lambda: self.asst.handle(text), self.on_reply)
 
     def on_reply(self, res):
+        self.show_typing(False)
         self.working = False
         self.set_input(True)
         self.status.text = "Parser: %s" % self.asst.backend.name
         if isinstance(res, Exception):
             self.say("Error: %s" % type(res).__name__, "sys")
             return
+        res = self.asst.localized(res)   # replies from approve/report/... too, not only handle()
         self.speak_reply(res)
         if res.kind == "proposal":
             self.pending = (res.action_id, res.action_hash)
@@ -287,6 +392,12 @@ class AssistantApp(App):
             self.say(res.text, "sys" if res.kind in ("unsupported", "error") else "bot")
         if getattr(res, "extra", None) in ("auto_send_setup", "auto_send_settings"):
             self.auto_send_buttons(res.extra)
+        elif getattr(res, "extra", None) == "customize":
+            self.button_list([("Open Customize", self.show_customize)], accent=True, icon="list", keep=True)
+        elif getattr(res, "extra", None) == "automations":
+            self.button_list([("Open Automations", self.show_automations)], accent=True, icon="repeat", keep=True)
+        elif getattr(res, "extra", None) == "control_setup":
+            self.button_list([("Turn on phone control", self.control_setup)], accent=True, icon="sliders", keep=True)
         elif getattr(res, "extra", None) == "battery_exemption":
             Clock.schedule_once(lambda *_: self.asst.daily.request_battery_exemption(), 1.5)
 
@@ -425,9 +536,14 @@ class AssistantApp(App):
         if not self.voice.mic_allowed():
             self.ask_mic_permission()
             return
-        self.voice.start_listening(self.vset.prefer_offline)
+        self.voice.start_listening(True)   # offline only: the "Allow online" choice was removed
         self.chrome.set_listening(True)
         self.status.text = "Listening... (%s)" % self.voice.recognizer_label()
+        self.mic_hint("Starting mic...")
+
+    def mic_hint(self, text=None):
+        """What the empty typing box says while the mic is on (None = the normal hint)."""
+        self.entry.hint_text = text or "Message %s..." % APP_NAME
 
     def ask_mic_permission(self):
         try:
@@ -448,6 +564,11 @@ class AssistantApp(App):
             return
         if kind == "ready":
             self.status.text = "Listening... (%s)" % self.voice.recognizer_label()
+            self.mic_hint("Listening... speak now")
+            return
+        if kind == "loading":
+            self.status.text = "Loading the voice pack..."
+            self.mic_hint("Loading voice pack...")
             return
         if kind == "processing":
             self.status.text = "Recognizing..."
@@ -455,13 +576,15 @@ class AssistantApp(App):
         if kind == "info":
             self.say(value, "sys")
             return
-        if kind == "offline_status":
-            self._offline_status = value
+        if kind in ("offline_status", "builtin_status"):
+            if kind == "offline_status":
+                self._offline_status = value
             if self._voice_refresh:
                 self._voice_refresh()
             return
         # final / nospeech / error / idle: listening is over
         self.chrome.set_listening(False)
+        self.mic_hint()
         if self.asst is not None and not self.working:
             self.status.text = "Parser: %s" % self.asst.backend.name
         if kind == "final":
@@ -521,9 +644,18 @@ class AssistantApp(App):
                                  kind="selected" if p.id == s.profile_id else "normal")
                 b.bind(on_release=lambda _b, pid=p.id: (s.use_profile(pid), save(), refresh()))
                 box.add_widget(b)
-            label("Listening without internet")
-            chips(((True, "Offline only"), (False, "Allow online")), s.prefer_offline,
-                  lambda v: setattr(s, "prefer_offline", v))
+            label("Listening: offline only (your voice never leaves the phone)")
+            chips((("builtin", "Lazey voice pack"), ("phone", "Phone speech")), s.engine, pick_engine)
+            if s.engine == "builtin":
+                bst = self.voice.builtin_state
+                label({"ready": "Voice pack ready: built into Lazey, works on any phone without internet.",
+                       "loading": "Voice pack: loading...",
+                       "error": "Voice pack could not load: %s" % self.voice.builtin_error[:60]}.get(
+                    bst, "Voice pack: built into Lazey (English, India). It loads on the first mic tap."), 40, "muted")
+                label("Best with clear English words, e.g. 'call mummy', 'send hi to rahul on whatsapp'.", 40, "muted")
+                if self.voice.tts_voice != "-":
+                    label("Last voice used: %s" % self.voice.tts_voice, 36, "muted")
+                return
             st = self._offline_status
             if st is None:
                 label("Offline speech: checking...", 36, "muted")
@@ -543,10 +675,23 @@ class AssistantApp(App):
                 button("Check again", lambda: self.voice.check_offline(), icon="search")
             if self.voice.tts_voice != "-":
                 label("Last voice used: %s" % self.voice.tts_voice, 36, "muted")
+        def pick_engine(engine):
+            s.engine = engine
+            self.voice.cancel_listening()
+            self.voice.engine = engine
+            if self.voice.available():
+                if engine == "phone":
+                    self.voice.check_offline()   # result comes back as the 'offline_status' event
+                else:
+                    self.voice.load_builtin()    # result comes back as the 'builtin_status' event
+
         self._voice_refresh = refresh
         refresh()
         if self.voice.available():
-            self.voice.check_offline()  # result comes back as the 'offline_status' event
+            if s.engine == "phone":
+                self.voice.check_offline()  # result comes back as the 'offline_status' event
+            else:
+                self.voice.load_builtin()
 
     def on_pause(self):
         self.voice.pause()  # release the mic and stop speaking in the background
@@ -560,6 +705,10 @@ class AssistantApp(App):
             if r is not None:
                 self.say(r.text, "sys" if r.kind == "error" else "bot")
                 self.speak_reply(r)
+            # back after approved phone-control steps: say how they went (and what was read)
+            r = self.asst.control_report()
+            if r is not None:
+                self.on_reply(r)   # may be a "which one?" list (several chats with that name)
             Clock.schedule_once(lambda *_: self.run_tapped_routine(), 0.5)
             # back from Settings after turning auto-send on: remember it
             if getattr(self.asst.messages, "auto_send_ready", lambda: False)() and not self.vset.auto_send_wanted:
@@ -601,6 +750,172 @@ class AssistantApp(App):
         res = self.asst.auto_send_status()
         self.say(res.text, "bot", save=False)
         self.auto_send_buttons(res.extra)
+
+    def show_settings(self):
+        """Menu > Settings: Customize (messaging apps, incl. WhatsApp auto-send) and Phone control."""
+        if not self.asst:
+            return
+        box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
+        box.bind(minimum_height=box.setter("height"))
+        pop = self.popup("Settings", box)
+
+        def customize(*_):
+            pop.dismiss()
+            self.show_customize()
+        box.add_widget(ThemedButton(text="Customize: messaging apps", icon="list", mode="icon_text", kind="accent",
+                                    fixed_stack="side", size_hint_x=1, height=dp(48), on_release=customize))
+        # (WhatsApp auto-send is in Customize > WhatsApp, with the other things WhatsApp needs)
+
+        # Phone control: approved steps in other apps (open, tap, type, search, Instagram messages...)
+        ctl = self.asst.control
+        pc_on = bool(ctl.ready()) if ctl.capability_check() else None
+        box.add_widget(Widget(size_hint_y=None, height=dp(10)))
+        self._heading(box, "Phone control")
+        info2 = Label(text=("ON: Lazey can run the steps you approve in other apps (e.g. 'open youtube and search "
+                            "lofi', Instagram messages)." if pc_on else
+                            "OFF: turn it on to let Lazey run approved steps in other apps.")
+                      if pc_on is not None else "This works only in the phone app.",
+                      size_hint_y=None, halign="left", valign="middle")
+        info2.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)),
+                   texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1] + dp(8)))
+        box.add_widget(style_label(info2))
+        if pc_on is not None:
+            def go_pc(*_):
+                pop.dismiss()
+                if pc_on:
+                    self.say("Opening Settings at '%s phone control': tap it to switch it off or on." % APP_NAME,
+                             "sys", save=False)
+                    if not ctl.open_settings():
+                        self.say("Could not open Settings. Open Settings > Accessibility > %s phone control "
+                                 "yourself." % APP_NAME, "sys", save=False)
+                else:
+                    self.control_setup()
+            box.add_widget(ThemedButton(text="Phone control settings" if pc_on else "Turn on phone control",
+                                        icon="sliders", mode="icon_text", fixed_stack="side",
+                                        size_hint_x=1, height=dp(44), on_release=go_pc))
+
+    # ---------- Settings > Customize: messaging apps on this phone ----------
+    def show_customize(self):
+        """Every messaging app found on the phone, with whether Lazey can send through it yet."""
+        if not self.asst:
+            return
+        apps, state = self.asst.messaging_setup()
+        box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
+        box.bind(minimum_height=box.setter("height"))
+        pop = self.popup("Customize", box)
+        self._heading(box, "Messaging apps on this phone (%d)" % len(apps))
+        if not apps:
+            box.add_widget(self._wrap_label("No messaging apps found."))
+        missing = getattr(self.asst, "_not_installed", [])
+        for i, app in enumerate(apps + missing):
+            if i == len(apps):
+                box.add_widget(Widget(size_hint_y=None, height=dp(6)))
+                self._heading(box, "Not installed (tap to install)")
+            st, _ = messaging.status(app, state)
+            mark = {"ready": "check", "setup": "sliders", "unsupported": "close", "missing": "plus"}[st]
+
+            def open_app(_b, a=app):
+                pop.dismiss()
+                self.show_app_setup(a)
+            box.add_widget(ThemedButton(text="%s  -  %s" % (app["label"], messaging.status_text(app, state)),
+                                        icon=mark, mode="icon_text", fixed_stack="side", halign="left",
+                                        size_hint_x=1, height=dp(52), on_release=open_app))
+
+    def _wrap_label(self, text, role=None, markup=False):
+        lb = Label(text=text, size_hint_y=None, halign="left", valign="middle", markup=markup)
+        lb.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)),
+                texture_size=lambda w, *_: setattr(w, "height", w.texture_size[1] + dp(8)))
+        return style_label(lb, role) if role else style_label(lb)
+
+    def show_app_setup(self, app):
+        """What Lazey needs to message through one app: each need with OK / missing and a button to fix it."""
+        apps, state = self.asst.messaging_setup()
+        box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(8))
+        box.bind(minimum_height=box.setter("height"))
+        pop = self.popup(app["label"], box)
+        if app["support"] == "unsupported":
+            box.add_widget(self._wrap_label("Lazey cannot send messages with %s yet. The app is on this phone, but "
+                                            "support for it has not been built." % app["label"]))
+            return
+        if app["support"] == "untested":
+            box.add_widget(self._wrap_label("Note: sending with %s is built but has not been tested on a real phone."
+                                            % app["label"], "muted"))
+        reqs = messaging.requirements_for(app, state)
+        self._heading(box, "What is needed to send messages")
+        for r in reqs:
+            icon = glyph("check") if r["ok"] else glyph("close")
+            tag = "" if r["ok"] else (" (optional)" if r["optional"] else "")
+            box.add_widget(self._wrap_label("[font=%s]%s[/font]  %s%s" % (fonts.path(fonts.ICON), icon, r["label"], tag),
+                                            markup=True))
+            if r["note"] and not r["ok"]:
+                box.add_widget(self._wrap_label(r["note"], "muted"))
+            if r["ok"] and r["id"] in ("auto_send", "phone_control"):
+                def manage(_b, rid=r["id"]):
+                    pop.dismiss()
+                    if rid == "auto_send":
+                        self.auto_send_open_settings()
+                    elif not self.asst.control.open_settings():
+                        self.say("Could not open Settings. Open Settings > Accessibility > %s phone control "
+                                 "yourself." % APP_NAME, "sys", save=False)
+                box.add_widget(ThemedButton(text="Open settings (switch off)", icon="sliders", mode="icon_text",
+                                            fixed_stack="side", size_hint_x=1, height=dp(44), on_release=manage))
+            if r["fix"]:
+                def fix(_b, f=r["fix"]):
+                    pop.dismiss()
+                    self.fix_requirement(f, app)
+                box.add_widget(ThemedButton(text="Fix this", icon="sliders", mode="icon_text", fixed_stack="side",
+                                            size_hint_x=1, height=dp(44), on_release=fix))
+        ex = messaging.EXAMPLE.get(app["id"])
+        if ex:
+            self._heading(box, "How to ask")
+            box.add_widget(self._wrap_label(ex, "muted"))
+
+    def fix_requirement(self, fix, app):
+        """The 'Fix this' button of one requirement in Settings > Customize."""
+        if fix.startswith("perm:"):
+            self.say("Asking for the permission needed for %s." % app["label"], "sys", save=False)
+            self.ask_permissions([fix[5:]])
+        elif fix == "auto_send":
+            self.auto_send_setup()
+        elif fix == "phone_control":
+            self.control_setup()
+        elif fix.startswith("handle_help:"):
+            a = fix.split(":", 1)[1]
+            what = "email address" if a == "gmail" else "%s username" % messaging.LABEL[a]
+            self.say("Tell me the %s of each person you want to message, once. For example:\n%s" % (
+                what, messaging.EXAMPLE[a].split("  ->  ")[0]), "sys", save=False)
+        elif fix.startswith("install:"):
+            self.open_store(fix.split(":", 1)[1])
+
+    def open_store(self, package):
+        """Play Store page of an app (to install Messenger, ...)."""
+        try:
+            from jnius import autoclass
+            Intent, Uri = autoclass("android.content.Intent"), autoclass("android.net.Uri")
+            PA = autoclass("org.kivy.android.PythonActivity")
+            # Google Play first: on the test phone (vivo) a plain market:// link opened the vivo store instead
+            for url, store in (("market://details?id=%s" % package, "com.android.vending"),
+                               ("market://details?id=%s" % package, None),
+                               ("https://play.google.com/store/apps/details?id=%s" % package, None)):
+                try:
+                    it = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    if store:
+                        it.setPackage(store)
+                    it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    PA.mActivity.startActivity(it)
+                    return
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        self.say("Could not open the Play Store. Install '%s' yourself." % package, "sys", save=False)
+
+    def control_setup(self):
+        self.say("In the screen that opens, tap '%s phone control' (under 'Downloaded services') and switch it "
+                 "on.\nIf it is greyed out ('Restricted setting'): open Settings > Apps > %s, tap the 3 dots at the "
+                 "top right, choose 'Allow restricted settings', then try again.\nIt only runs the steps you approve, "
+                 "never types into password fields, and stops after 90 seconds." % (APP_NAME, APP_NAME), "sys", save=False)
+        Clock.schedule_once(lambda *_: self.asst.control.open_settings(), 2.0)
 
     def auto_send_setup(self):
         self.say("To let me press Send in WhatsApp: in the screen that opens, tap '%s auto-send' (under "
@@ -668,6 +983,7 @@ class AssistantApp(App):
                 else:
                     self.asst.clear_chat()
                     self.log.clear_widgets()
+                    self._last_day = None
                     self.chrome.refresh_hero()
                     pop.dismiss()
             clear.bind(on_release=clear_chat)
@@ -681,6 +997,7 @@ class AssistantApp(App):
                 else:
                     self.asst.delete_all_data()
                     self.log.clear_widgets()  # chat history is part of "all data"
+                    self._last_day = None
                     self.say("All data deleted.", "sys", save=False)
                     pop.dismiss()
             wipe.bind(on_release=confirm)  # (the label text is what `confirm` checks)
@@ -735,17 +1052,72 @@ class AssistantApp(App):
                     [("Run", "right", lambda nm=rt["name"]: (pop.dismiss(), self.send_text(nm))),
                      ("Del", "trash", lambda i=rt["id"]: (self.asst.delete_routine(i), refresh()))])
             scheds = self.asst.list_schedules()
-            self._heading(box, "Daily messages" if scheds else "No daily messages.")
+            self._heading(box, "Daily messages and other timed items: Menu > Automations")
             if (scheds or todos or any(r.get("trigger") for r in routines)) and not self.asst.daily_battery_ok():
                 b = ThemedButton(text="Phone may stop timed items: allow background", icon="bell", mode="icon_text",
                                  fixed_stack="side", size_hint_x=1, height=dp(44))
                 b.bind(on_release=lambda *_: self.asst.daily.request_battery_exemption())
                 box.add_widget(b)
-            for s in scheds:
-                how = "SMS" if s.get("channel") == "sms" else "WhatsApp"
-                row("every %s %s  %s to %s\n\"%s\"" % (days_text(s.get("days")), s.get("time", "?"), how,
-                                                     s.get("name", "?"), s.get("text", "")[:60]),
-                    [("Del", "trash", lambda i=s["id"]: (self.asst.delete_schedule(i), refresh()))], h=64)
+        refresh()
+
+    AUTOMATION_EXAMPLES = (
+        "every day at 9 am remind me to study",
+        "har din subah 4 baje rahul ko sms karo ki good morning",
+        "every day at 7 am open youtube then search lofi",
+        "roz 9 baje rahul ko instagram pe good morning bhejo",
+        "weekdays 8 am what is the plan for today",
+    )
+
+    def show_automations(self):
+        """Menu > Automations: everything that runs at a set time (reminders, app automations, daily
+        messages, timed routines), with Delete. New ones are made by saying them in the chat."""
+        if not self.asst:
+            return
+        box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
+        box.bind(minimum_height=box.setter("height"))
+        pop = self.popup("Automations", box)
+
+        def wrapped(text, role="text", align="left"):
+            """A label as tall as its wrapped text."""
+            lb = Label(text=text, size_hint_y=None, halign=align, valign="top")
+            lb.bind(width=lambda w, *_: setattr(w, "text_size", (w.width, None)),
+                    texture_size=lambda w, ts: setattr(w, "height", ts[1] + dp(6)))
+            return style_label(lb, role)
+
+        def use_example(text):
+            pop.dismiss()
+            self.entry.text = text        # put it in the typing box: change it, then Send
+            self.entry.focus = True
+
+        def refresh():
+            box.clear_widgets()
+            items = self.asst.list_automations()
+            self._heading(box, "%d automation%s" % (len(items), "" if len(items) == 1 else "s") if items
+                          else "No automations yet")
+            for x in items:
+                text = "Every %s at %s\n%s\n%s" % (days_text(x["days"]), x["time"], x["what"], x["how"])
+                r = BoxLayout(size_hint_y=None, height=dp(56), spacing=dp(4))
+                lb = wrapped(text)
+                lb.bind(height=lambda w, h, row=r: setattr(row, "height", max(dp(56), h)))
+                r.add_widget(lb)
+                r.add_widget(ThemedButton(text="Del", icon="trash", mode="icon", height=dp(44), size_hint_x=None,
+                                          width=dp(52), on_release=lambda _b, s=x["src"], i=x["id"]: (
+                                              self.asst.delete_automation(s, i), refresh())))
+                box.add_widget(r)
+            if items and not self.asst.daily_battery_ok():
+                b = ThemedButton(text="Phone may stop automations: allow background", icon="bell", mode="icon_text",
+                                 fixed_stack="side", size_hint_x=1, height=dp(44))
+                b.bind(on_release=lambda *_: self.asst.daily.request_battery_exemption())
+                box.add_widget(b)
+            self._heading(box, "Add one by saying it (tap an example to edit it):")
+            for ex in self.AUTOMATION_EXAMPLES:
+                b = ThemedButton(text=ex, icon="plus", wide=True, halign="left", size_hint_x=1, height=dp(46),
+                                 font_px=13)
+                b.bind(on_release=lambda _b, t=ex: use_example(t))
+                box.add_widget(b)
+            box.add_widget(wrapped("Reminders and SMS run by themselves. App steps and WhatsApp need one tap on "
+                                   "the notification (Android does not let apps open other apps in the background).",
+                                   "muted", "center"))
         refresh()
 
 

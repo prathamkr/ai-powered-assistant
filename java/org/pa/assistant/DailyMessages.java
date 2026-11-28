@@ -78,6 +78,35 @@ public class DailyMessages {
         }
     }
 
+    /** Automation (Menu > Automations): a reminder notification with `text` every day / on some
+     *  weekdays (days bitmask as in saveDays). Nothing else happens. */
+    public static boolean saveNotice(Context ctx, int id, String text, int hour, int minute, int days) {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("channel", "notice").put("text", text).put("hour", hour).put("minute", minute).put("days", days);
+            store(ctx, id, o);
+            setAlarm(ctx, id, hour, minute, days);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Automation: at the time a notification "Automation: label - tap to run" opens the app, which
+     *  runs the steps the user approved when creating it (apps cannot open other apps from the
+     *  background, and phone control needs the screen unlocked, so a tap starts it). */
+    public static boolean saveAutomation(Context ctx, int id, String label, int hour, int minute, int days) {
+        try {
+            JSONObject o = new JSONObject();
+            o.put("channel", "automation").put("name", label).put("hour", hour).put("minute", minute).put("days", days);
+            store(ctx, id, o);
+            setAlarm(ctx, id, hour, minute, days);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     static void store(Context ctx, int id, JSONObject o) throws Exception {
         SharedPreferences p = prefs(ctx);
         Set<String> ids = new HashSet<>(p.getStringSet("ids", new HashSet<String>()));

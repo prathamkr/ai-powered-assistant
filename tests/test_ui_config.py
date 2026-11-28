@@ -100,7 +100,7 @@ class IconTests(unittest.TestCase):
 class ConfigTests(unittest.TestCase):
     def test_default_layout_matches_the_design(self):
         cfg = C.default_config()
-        self.assertEqual(ids(cfg, "menu"), ["calendar", "tasks", "prefs", "autosend", "voice"])
+        self.assertEqual(ids(cfg, "menu"), ["calendar", "tasks", "automations", "prefs", "settings", "voice"])
         self.assertEqual(ids(cfg, "input_left"), ["plus"])
         self.assertEqual(ids(cfg, "input_right"), ["mic", "send"])
         self.assertEqual(C.normalize(cfg), cfg)  # already valid, normalize is a no-op

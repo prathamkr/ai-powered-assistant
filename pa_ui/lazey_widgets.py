@@ -1,6 +1,8 @@
 """The look of Lazey: animated orb + waves, greeting, chat bubbles, brand header, slide-out menu."""
+import datetime
 import math
 import random
+import time
 
 from kivy.clock import Clock
 from kivy.graphics import Color, Ellipse, Line
@@ -12,6 +14,7 @@ from kivy.uix.modalview import ModalView
 from kivy.uix.widget import Widget
 
 from . import config, fonts, themes
+from .iconset import glyph
 from .widgets import IconView, T, ThemedButton, _Surface, style_label, surface
 
 def _ease_out_cubic(t):
@@ -199,54 +202,199 @@ class Hero(BoxLayout):
         return super().on_touch_up(touch) if self.shown else False
 
 
-class Bubble(BoxLayout):
-    """One chat message. who: "user" (right, tinted), "bot" (left, card) or "sys" (centered note)."""
+def clock_text(ts):
+    """'7:31 PM' for a unix time."""
+    t = time.localtime(ts)
+    return "%d:%02d %s" % (t.tm_hour % 12 or 12, t.tm_min, "AM" if t.tm_hour < 12 else "PM")
 
-    def __init__(self, text, who="bot", **kw):
-        super().__init__(size_hint_y=None, **kw)
+
+def day_text(ts, now=None):
+    """'Today', 'Yesterday' or '26 Nov 2026' for the day chip between messages."""
+    d = datetime.date.fromtimestamp(ts)
+    today = datetime.date.fromtimestamp(now if now is not None else time.time())
+    if d == today:
+        return "Today"
+    if d == today - datetime.timedelta(days=1):
+        return "Yesterday"
+    return "%d %s %d" % (d.day, d.strftime("%b"), d.year)
+
+
+class Avatar(Widget):
+    """Lazey's small round avatar (accent disc + wave icon) next to its messages."""
+
+    def __init__(self, diameter=28, **kw):
+        super().__init__(size_hint=(None, None), size=(dp(diameter), dp(diameter)), **kw)
+        self.icon = IconView("wave", size_hint=(None, None))
+        self.add_widget(self.icon)
+        self.bind(pos=self._draw, size=self._draw)
+        T.bind(version=self._draw)
+        self._draw()
+
+    def _draw(self, *_):
+        self.canvas.before.clear()
+        with self.canvas.before:
+            Color(*themes.hex_to_rgba(themes.mix(T.h("surface"), T.h("user_bubble"), 0.55)))
+            Ellipse(pos=self.pos, size=self.size)
+        pad = self.width * 0.2
+        self.icon.size = (self.width - 2 * pad, self.height - 2 * pad)
+        self.icon.pos = (self.x + pad, self.y + pad)
+        self.icon.set_color(themes.hex_to_rgba("#ffffff"))
+
+
+class Bubble(BoxLayout):
+    """One chat message, like a messaging app. who: "user" (right, filled with the accent colour,
+    time + double tick), "bot" (left, with Lazey's avatar, time) or "sys" (centred note)."""
+
+    def __init__(self, text, who="bot", ts=None, **kw):
+        super().__init__(size_hint_y=None, spacing=dp(6), **kw)
         self.who = who
-        self.px, self.py = dp(14), dp(10)
+        self.ts = ts if ts is not None else time.time()
+        self.px, self.py = dp(12), dp(8)
         self.label = Label(text=text, size_hint=(None, None), halign="left" if who != "sys" else "center",
-                           valign="top", padding=(self.px, self.py))
+                           valign="top")
+        self.meta = Label(text="", markup=True, size_hint=(None, None), halign="right", valign="bottom")
+        self.box = Widget(size_hint=(None, None))   # the bubble itself: text on top, time underneath
+        self.box.add_widget(self.label)
+        if who != "sys":
+            self.box.add_widget(self.meta)
+        self.avatar = Avatar() if who == "bot" else None
         self.bind(width=self._wrap)
         self.label.bind(texture_size=self._fit)
+        self.meta.bind(texture_size=self._fit)
+        self.box.bind(pos=self._place)
         T.bind(version=self._style)
         if who == "user":
             self.add_widget(Widget())
-            self.add_widget(self.label)
+            self.add_widget(self.box)
         elif who == "bot":
-            self.add_widget(self.label)
+            holder = BoxLayout(orientation="vertical", size_hint=(None, 1), width=self.avatar.width)
+            holder.add_widget(Widget())
+            holder.add_widget(self.avatar)        # the avatar sits at the bottom, by the bubble's corner
+            self.add_widget(holder)
+            self.add_widget(self.box)
             self.add_widget(Widget())
         else:
             self.add_widget(Widget())
-            self.add_widget(self.label)
+            self.add_widget(self.box)
             self.add_widget(Widget())
-        self.label._surf = None
+        self.box._surf = None
         self._style()
         self._wrap()
 
+    def _natural_width(self):
+        """Width of the longest line if it were not wrapped (a short message gets a short bubble: with a
+        fixed wrap width Kivy renders every text as wide as that width)."""
+        try:
+            self.label.texture_update()
+            return max(self.label._label.get_extents(line)[0] for line in (self.label.text or " ").split("\n"))
+        except Exception:
+            return None
+
     def _wrap(self, *_):
-        frac = 0.92 if self.who == "sys" else 0.84
-        self.label.text_size = (max(dp(60), self.width * frac - 2 * self.px), None)
+        if self.who == "sys":
+            limit = self.width * 0.92
+        else:
+            limit = self.width * 0.78 - (self.avatar.width + dp(6) if self.avatar else 0)
+        limit = max(dp(60), limit - 2 * self.px)
+        nat = self._natural_width()
+        w = min(limit, nat + dp(2)) if nat else limit
+        if self.label.text_size[0] != w:
+            self.label.text_size = (w, None)
 
     def _fit(self, *_):
-        w, h = self.label.texture_size
-        self.label.size = (w + 2 * self.px, h + 2 * self.py)
-        self.height = self.label.height + dp(6)
+        tw, th = self.label.texture_size
+        mw, mh = self.meta.texture_size if self.who != "sys" else (0, 0)
+        self.label.size = (tw, th)
+        self.meta.size = (mw, mh)
+        # the time goes on the last text line when it fits there, else on its own line (like chat apps)
+        limit = (self.width * 0.78 - (self.avatar.width + dp(6) if self.avatar else 0)) - 2 * self.px
+        inline = self.who != "sys" and th <= self.label.font_size * 1.6 and tw + mw + dp(10) <= limit
+        w = (tw + mw + dp(10) if inline else max(tw, mw)) + 2 * self.px
+        h = th + (0 if inline or self.who == "sys" else mh + dp(2)) + 2 * self.py
+        self.box.size = (w, h)
+        self.height = h + dp(6)
+        self._inline = inline
+        self._place()
+
+    def _place(self, *_):
+        bx, by = self.box.pos
+        self.label.pos = (bx + self.px, by + self.box.height - self.py - self.label.height)
+        self.meta.pos = (bx + self.box.width - self.px - self.meta.width, by + self.py - dp(2))
 
     def _style(self, *_):
-        role = {"user": "user", "bot": "bot", "sys": "sys"}[self.who]
-        self.label.color = T.c(role)
         self.label.font_size = sp(15 * T.font_scale)
-        self.label.canvas.before.clear()
-        if T.bubbles == "plain":
-            self.label._surf = None
-            return
+        self.meta.font_size = sp(10.5 * T.font_scale)
+        if self.who == "user":
+            fg = T.c("user_bubble_text")
+            self.label.color = fg
+            tick = "[font=%s]%s[/font]" % (fonts.ICON, glyph("done_all"))
+            self.meta.text = "%s %s" % (clock_text(self.ts), tick)
+            self.meta.color = (fg[0], fg[1], fg[2], 0.75)
+        else:
+            self.label.color = T.c("sys" if self.who == "sys" else "bot")
+            self.meta.text = clock_text(self.ts)
+            self.meta.color = T.c("muted")
+        self.box.canvas.before.clear()
         if self.who == "sys":   # notes and errors: a soft pill tinted with the theme's own note colour
-            self.label._surf = _Surface(self.label, fill="surface", border=0.45, radius=16, tint=0.14, tint_role="sys")
-            return
-        self.label._surf = _Surface(self.label, fill="surface", border=0.55 if self.who == "user" else 0.12,
-                                    tint=0.22 if self.who == "user" else 0.0)
+            self.box._surf = _Surface(self.box, fill="surface", border=0.45, radius=16, tint=0.14, tint_role="sys")
+        elif self.who == "user":
+            self.box._surf = _Surface(self.box, fill="user_bubble", border=0, radius=18, corners=(1, 1, 0.22, 1))
+        else:
+            self.box._surf = _Surface(self.box, fill="surface", border=0, radius=18, corners=(1, 1, 1, 0.22))
+        self._wrap()   # the font size may have changed: measure the text again
+
+
+class DayChip(BoxLayout):
+    """'Today' / 'Yesterday' / a date, centred between messages of different days."""
+
+    def __init__(self, ts, **kw):
+        super().__init__(size_hint_y=None, height=dp(34), padding=(0, dp(6)), **kw)
+        self.label = Label(text=day_text(ts), font_size=sp(12), size_hint=(None, 1))
+        self.label.bind(texture_size=lambda *_: setattr(self.label, "width", self.label.texture_size[0] + dp(24)))
+        surface(self.label, fill="surface", border=0, radius=11)
+        self.add_widget(Widget())
+        self.add_widget(self.label)
+        self.add_widget(Widget())
+        T.bind(version=self._tint)
+        self._tint()
+
+    def _tint(self, *_):
+        self.label.color = T.c("muted")
+
+
+class Typing(BoxLayout):
+    """Lazey's avatar + a small bubble with three bouncing dots while a reply is being worked out."""
+
+    def __init__(self, **kw):
+        super().__init__(size_hint_y=None, height=dp(42), spacing=dp(6), **kw)
+        holder = BoxLayout(orientation="vertical", size_hint=(None, 1), width=dp(28))
+        holder.add_widget(Widget())
+        holder.add_widget(Avatar())
+        self.add_widget(holder)
+        self.dots = Widget(size_hint=(None, None), size=(dp(58), dp(34)))
+        self.dots._surf = _Surface(self.dots, fill="surface", border=0, radius=18, corners=(1, 1, 1, 0.22))
+        self.add_widget(self.dots)
+        self.add_widget(Widget())
+        self.t = 0.0
+        self._ev = Clock.schedule_interval(self._tick, 1 / 20.0)
+
+    def _tick(self, dt):
+        self.t += dt
+        d = self.dots
+        d.canvas.after.clear()
+        col = T.c("muted")
+        with d.canvas.after:
+            for i in range(3):
+                ph = (self.t * 2.2 - i * 0.28) % 1.0
+                lift = math.sin(ph * math.pi) * dp(4) if ph < 1.0 else 0
+                Color(col[0], col[1], col[2], 0.45 + 0.55 * math.sin(ph * math.pi))
+                r = dp(3.5)
+                Ellipse(pos=(d.x + dp(15) + i * dp(12) - r, d.center_y - r + lift), size=(2 * r, 2 * r))
+
+    def stop(self):
+        if self._ev is not None:
+            self._ev.cancel()
+            self._ev = None
 
 
 class Brand(BoxLayout):
@@ -267,26 +415,39 @@ class Brand(BoxLayout):
         row.add_widget(self.title)
         row.add_widget(right)
         self.add_widget(row)
-        self.pill = None
+        self.pill = self.dot = None
         if tagline:
-            holder = BoxLayout(size_hint_y=None, height=dp(26))
-            self.pill = Label(text=config.TAGLINE, font_name=fonts.SUB, font_size=sp(12), size_hint=(None, 1),
-                              padding=(dp(14), 0))
-            self.pill.bind(texture_size=lambda *_: setattr(self.pill, "width", self.pill.texture_size[0] + dp(28)))
-            surface(self.pill, fill="surface", border=0.25, radius=13, tint=0.1)
+            # a chat header's status line: green dot + "online" (Lazey works offline, on the phone, so it
+            # is always there to answer)
+            holder = BoxLayout(size_hint_y=None, height=dp(20), spacing=dp(6))
+            self.dot = Widget(size_hint=(None, None), size=(dp(8), dp(8)))
+            self.dot.pos_hint = {"center_y": 0.5}
+            self.dot.bind(pos=self._draw_dot, size=self._draw_dot)
+            self.pill = Label(text="online", font_name=fonts.SUB, font_size=sp(13), size_hint=(None, 1))
+            self.pill.bind(texture_size=lambda *_: setattr(self.pill, "width", self.pill.texture_size[0]))
             if align == "center":
                 holder.add_widget(Widget())
+            holder.add_widget(self.dot)
             holder.add_widget(self.pill)
             holder.add_widget(Widget())
             self.add_widget(holder)
         T.bind(version=self._tint)
         self._tint()
 
+    def _draw_dot(self, *_):
+        if self.dot is None:
+            return
+        self.dot.canvas.clear()
+        with self.dot.canvas:
+            Color(*T.c("online"))
+            Ellipse(pos=self.dot.pos, size=self.dot.size)
+
     def _tint(self, *_):
         self.title.color = T.c("text")
         self.logo.set_color(themes.hex_to_rgba(themes.mix(T.h("accent"), "#ffffff", 0.25)))
         if self.pill is not None:
             self.pill.color = T.c("muted")
+        self._draw_dot()
 
 
 class Drawer(ModalView):

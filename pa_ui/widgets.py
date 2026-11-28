@@ -256,8 +256,12 @@ class _Surface:
     """Draws a rounded, softly bordered surface behind `widget`; follows pos/size/theme.
     Bound through bound *methods* so Kivy holds them weakly; the widget owns the only strong reference."""
 
-    def __init__(self, widget, fill="surface", border=0.35, radius=None, tint=0.0, alpha=1.0, tint_role="accent"):
+    def __init__(self, widget, fill="surface", border=0.35, radius=None, tint=0.0, alpha=1.0, tint_role="accent",
+                 corners=None):
         self._ref = weakref.ref(widget)
+        # corners: radius factor per corner (top-left, top-right, bottom-right, bottom-left), e.g. a chat
+        # bubble's small corner on the side it comes from. Uneven corners are drawn without a border line.
+        self.corners = corners
         self.fill, self.border, self.radius, self.tint, self.alpha = fill, border, radius, tint, alpha
         self.tint_role = tint_role   # the colour the surface and its border lean towards
         widget.bind(pos=self.draw, size=self.draw)
@@ -275,6 +279,9 @@ class _Surface:
         w.canvas.before.clear()
         with w.canvas.before:
             Color(*themes.hex_to_rgba(fill, self.alpha))
+            if self.corners:
+                RoundedRectangle(pos=w.pos, size=w.size, radius=[r * f for f in self.corners])
+                return
             RoundedRectangle(pos=w.pos, size=w.size, radius=[r])
             if self.border:
                 Color(*themes.hex_to_rgba(themes.mix(base, T.h(self.tint_role), self.border), 0.9))

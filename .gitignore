@@ -17,3 +17,9 @@ dev.key
 .idea/
 Thumbs.db
 .DS_Store
+
+# APKs from docker/build.sh
+bin-docker/
+
+# Voice pack model (54 MB): docker/get-voice-model.sh downloads it
+vosk_model/

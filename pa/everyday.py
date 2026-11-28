@@ -20,7 +20,7 @@ WEEKDAY = {"monday": 0, "somvar": 0, "tuesday": 1, "mangalvar": 1, "wednesday": 
 # ---------- phone status ----------
 _ASK = (r"(\?|\b(kitni|kitna|kitne|kya|kaisa|kaisi|how much|how many|what|what's|whats|status|check|"
         r"batao|bata|bta|dikhao|level|left|bacha|bachi|baki|kab|when|is it|on hai|off hai|chal raha|"
-        r"working|info|details|tell me)\b)")
+        r"working|info|details|tell me|connected|connection|chalu|chal rha|chal raha)\b)")
 INFO = (
     ("battery", r"\b(battery|charging|charge)\b"),
     ("storage", r"\b(storage|space|jagah)\b"),
@@ -29,9 +29,11 @@ INFO = (
     ("device", r"\b(android version|phone model|phone details|device info|device details|about (?:my )?phone|"
                r"kaunsa phone|which phone|phone ki jaankari|phone ki details|os version)\b"),
     ("screen", r"\b(brightness|dark mode)\b"),
-    ("network", r"\b(internet|network|wi-?fi|mobile data|online)\b"),
+    ("network", r"\b(internet|network|wi-?fi|mobile data|online|net)\b"),
     ("time", r"\b(time kya|kitne baje|what time|time kitna|current time|samay|abhi kya time|time batao|"
-             r"aaj ki date|today'?s date|what'?s the date|date kya|aaj kaun sa din|what day)\b"),
+             r"aaj ki date|today'?s date|what'?s the date|date kya|aaj kaun sa din|what day|kya date|aaj ki tarikh|"
+             r"what'?s the time|the time now|time now|time hai|abhi time|abhi ka time|aaj ki tareekh|tarikh kya|tareekh kya|tarikh batao|date batao|what is (?:the )?date|which date|"
+             r"what date|today date|date today|kaun sa din|din kya|aaj kya din|what is (?:the )?day today|which day is (?:it|today)|what day today)\b"),
 )
 _NOT_INFO = re.compile(r"\b(send|bhejo|bhej|message|msg|call|set|lagao|laga|remind|yaad|todo|band karo|on karo)\b")
 
@@ -92,7 +94,8 @@ REMIND_RE = re.compile(r"\b(remind me|reminder|yaad dila(?:na|o|ye|iye|\s*dena|\
                        r"yaad karwa(?:na|\s*dena|\s*do)?|yaad karana)\b")
 TODO_ADD_RE = re.compile(r"\b(add (?:a )?(?:todo|to-?do|task)|todo|to-?do|to do list|task list)\b")
 LIST_RE = re.compile(r"\b(my|mere|meri|show|list|dikhao|dikha|pending|open|kya kya|what are|batao)\b.*"
-                     r"\b(todos?|to-?dos|to do|tasks?|kaam|reminders?)\b|\b(kya kya karna hai|what do i have to do)\b")
+                     r"\b(todos?|to-?dos|to do|tasks?|kaam|reminders?)\b|\b(kya kya karna hai|kya kya pending|kya pending|pending (?:kya|kaam|tasks?|todos?)|what do i have to do|what'?s on my (?:todo |to-?do )?list|"
+                     r"(?:meri|my|mera)\s+(?:todo\s+|to-?do\s+|task\s+)?list)\b")
 DONE_RE = re.compile(r"\b(done|complete|completed|finished|ho gaya|ho gayi|ho gya|kar liya|kar diya|"
                      r"kar li|kar di|mark)\b")
 
@@ -127,9 +130,23 @@ def parse_todo(t, today, daily_time):
         rest = re.sub(r"\s+", " ", rest).strip(" ,.")
         ent = {"index": int(m.group(1))} if m and not rest else ({"text": rest} if rest else {})
         return {"intent": "done_todo", "entities": ent}
+    # "buy milk done" / "milk wala kaam ho gaya" / "i finished the report": a to-do named by its words
+    m = (re.match(r"^(?:i\s+)?(?:have\s+|just\s+)?(?:finished|completed|done with)\s+(?:the\s+|my\s+)?(.+)$", low)
+         or re.match(r"^(.+?)\s+(?:wala\s+|wali\s+)?(?:kaam\s+|task\s+|todo\s+)?(?:is\s+)?"
+                     r"(?:done|complete|completed|finished|ho\s*gaya|ho\s*gayi|ho\s*gya|kar\s*liya|kar\s*diya|"
+                     r"khatam(?:\s+ho\s+gaya)?)$", low))
+    if m and not REMIND_RE.search(low):
+        what = re.sub(r"\b(mera|meri|mere|my|the|wala|wali|kaam|task|todo|to-?do|ka|ki|ke|is|ye|yeh|woh|wo|ab|abhi)\b", " ",
+                      m.group(1))
+        what = re.sub(r"\s+", " ", what).strip(" ,.")
+        if what and len(what.split()) <= 6 and not re.search(r"\b(what|how|kya|kab|kaise|kitna|kitni|why|when)\b", low):
+            return {"intent": "done_todo", "entities": {"text": what}}
     remind = bool(REMIND_RE.search(low))
+    english_add = re.match(r"^(?:please\s+|plz\s+)?(?:add|put|write down|write|put down)\s+(.+?)\s+(?:to|in|on|into)\s+"
+                           r"(?:my\s+|the\s+)?(?:todo|to[-\s]?do|task)s?(?:\s+list)?$", low)
     hinglish_add = re.search(r"^(.+?)\s+(?:ko\s+)?(?:todo|to-?do|to do)(?:\s+list)?\s+(?:mein|me|main)\s+"
                              r"(?:daalo|dalo|daal do|add karo|likho|add kar do)$", low)
+    hinglish_add = hinglish_add or english_add
     if not (remind or hinglish_add or re.match(r"^(add\s+(?:a\s+)?)?(todo|to-?do|task)\b", low)):
         return None
     ent = {}

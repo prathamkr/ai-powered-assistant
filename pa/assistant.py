@@ -5,7 +5,8 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from . import config, planner
+from . import config, control, lang, messaging, planner
+from .adapters.automation import AutomationAdapter, describe as automation_steps
 from .adapters.base import UnsupportedAdapter
 from .adapters.daily_android import days_text
 from .approval import ApprovalEngine, Unsupported
@@ -48,7 +49,12 @@ EXAMPLES = (
 )
 
 
-def _suggest(text):
+def _show_handle(app, handle):
+    """'@rahul_23' for usernames; numbers, emails and Discord names as they are."""
+    return handle if app in ("gmail", "signal", "teams", "discord", "linkedin") else "@" + handle
+
+
+def _suggest(text, language="en"):
     import difflib
     words = set(re.findall(r"\w+", (text or "").lower()))
     scored = []
@@ -59,7 +65,7 @@ def _suggest(text):
             scored.append((hits, ratio, example))
     scored.sort(reverse=True)
     picks = [e for _, _, e in scored[:3]] or ["call mummy", "send hi to neha on whatsapp", "aaj ka plan kya hai"]
-    return " Try:\n" + "\n".join("- " + p for p in picks)
+    return " Try:\n" + "\n".join("- " + lang.command(p, language) for p in picks)
 
 
 PRONOUN_RE = re.compile(r"\b(usko|unko|unhe|usse|unse|isko|inko|him|her|them|same person|wahi|whi|usi ko)\b", re.I)
@@ -182,7 +188,7 @@ class Response:
 
 class Assistant:
     def __init__(self, store, backend, calendar, clock, contacts=None, phone=None, photos=None, apps=None,
-                 daily=None, messages=None, alarms=None, device=None):
+                 daily=None, messages=None, alarms=None, device=None, control=None):
         self.store, self.backend, self.calendar, self.clock = store, backend, calendar, clock
         self.contacts = contacts or UnsupportedAdapter("contacts")
         self.phone = phone or UnsupportedAdapter("phone_call")
@@ -192,6 +198,8 @@ class Assistant:
         self.messages = messages or UnsupportedAdapter("sms_message")
         self.alarms = alarms or UnsupportedAdapter("alarms")
         self.device = device or UnsupportedAdapter("device_info")
+        self.control = control or UnsupportedAdapter("phone_control")
+        self._awaiting_control = False  # an approved phone-control plan whose result is still to be told
         self._last_contact = None  # (name, number) of the last call/message, for "usko call karo"
         self._todo_view = []       # to-do ids in the order last shown (for "todo 2 done")
         self.adapters = {
@@ -199,6 +207,8 @@ class Assistant:
             "phone_call": self.phone,
             "daily_message": self.daily,
             "sms_message": self.messages,
+            "phone_control": self.control,
+            "automation": AutomationAdapter(self.daily),
             "settings": UnsupportedAdapter("settings"),
             "files": UnsupportedAdapter("files"),
         }
@@ -209,9 +219,42 @@ class Assistant:
         self._awaiting_send = None  # name whose WhatsApp auto-send result is still to be reported
         self._pending_alarm = None  # (intent, entities) waiting for a time / length
         self._photo_ids = set()  # only photos from the last search may be opened
+        self.lang = "en"         # reply language: the language of the last task ("en" | "hi", pa/lang.py)
+        self._auto = None        # while building an automation: {"time", "days", "command"}
 
     # ---------- main entry ----------
     def handle(self, text):
+        """Reply in the language of the task: English task -> English reply, Hinglish -> Hinglish."""
+        self.lang = self._reply_lang(text)
+        return self.localized(self._handle(text))
+
+    def localized(self, res):
+        """The reply (text and choices) in the current reply language."""
+        if isinstance(res, Response):
+            res.text = lang.localize(res.text, self.lang)
+            if res.options:
+                res.options = [lang.localize(o, self.lang) for o in res.options]
+        return res
+
+    def tr(self, text):
+        return lang.localize(text, self.lang)
+
+    def _reply_lang(self, text):
+        """The task's language. The message / note text inside it does not count ("send hi to rahul
+        saying main late hoon" is an English task), nor does an answer that IS the message text."""
+        if self._pending_msg is not None and self._pending_msg.get("need") == "text":
+            return self.lang
+        body = text or ""
+        try:
+            ent = self.backend.parse(body, self.clock().date()).get("entities") or {}
+            inner = ent.get("text")
+            if inner and inner in body:
+                body = body.replace(inner, " ")
+        except Exception:
+            pass
+        return lang.detect(body, self.lang)
+
+    def _handle(self, text):
         text = (text or "").strip()[:config.MAX_INPUT_CHARS]
         if not text:
             return Response("error", "Please type something.")
@@ -251,7 +294,7 @@ class Assistant:
             # The previous reply asked "who?" or "what should it say?": a reply that is not a new
             # command answers that question ("hii" -> the message text).
             pend, self._pending_msg = self._pending_msg, None
-            if validate(self.backend.parse(text, now.date()), now.date()).intent == "unknown":
+            if validate(self.backend.parse(text, now.date()), now.date()).intent in ("unknown", "smalltalk"):
                 answer = text.strip(" .!")
                 if pend["need"] == "name":
                     answer = re.sub(r"^(?:to|ko)\s+|\s+(?:ko)$", "", answer, flags=re.I)
@@ -336,15 +379,313 @@ class Assistant:
             return self._find_photos(it, now)
         if n == "open_app":
             return self._open_app(it)
+        if n == "schedule_message" and it.entities.get("channel") in control.SOCIAL:
+            # "roz 9 baje rahul ko instagram pe good morning bhejo": an app automation
+            return self._schedule_task({"time": it.entities.get("time"), "days": it.entities.get("days"),
+                                        "command": text, "social": dict(it.entities)})
         if n == "schedule_message":
             return self._daily(it.entities)
+        if n == "schedule_notice":
+            return self._schedule_notice(it.entities)
+        if n == "schedule_task":
+            return self._schedule_task(it.entities)
+        if n == "list_automations":
+            return self._automations_text()
         if n == "send_message":
             return self._send(it.entities)
         if n in ("set_alarm", "set_timer", "show_alarms"):
             return self._alarm(n, it.entities)
+        if n == "smalltalk":
+            return self._smalltalk(it.entities.get("kind"), now)
+        if n == "phone_control":
+            return self._phone_control(it.entities)
+        if n == "save_handle":
+            return self._save_handle(it.entities)
+        if n == "list_handles":
+            return self._list_handles()
+        if n == "delete_handle":
+            return self._delete_handle(it.entities)
+        if n == "messaging_help":
+            apps, state = self.messaging_setup()
+            return Response("info", messaging.how_to(it.entities.get("msg_app"), apps, state), extra="customize")
         if n in UNSUPPORTED:
             return Response("unsupported", "This is not supported yet (%s): no adapter is implemented." % n)
-        return Response("info", "Sorry, I did not understand that." + _suggest(text))
+        return Response("info", "Sorry, I did not understand that." + _suggest(text, self.lang))
+
+    # ---------- phone control (approved steps in other apps) ----------
+    def _phone_control(self, ent):
+        steps = [dict(s) for s in ent.get("ui_steps") or []]
+        if not steps:
+            return Response("info", "Sorry, I did not understand that." + _suggest("", self.lang))
+        if not self.control.capability_check():
+            return Response("unsupported", "Phone control works only in the phone app.")
+        if steps[0]["op"] != "open" and steps[0]["op"] not in control.GLOBAL_OPS:
+            return Response("need_info", "Kaunse app mein? Pehle app kholne ka step bolo, jaise: "
+                                         "'youtube kholo phir lofi search karo' ya 'whatsapp kholo phir rahul pe click karo'.")
+        if any(s["op"] == "open" for s in steps):
+            try:
+                apps = self.apps.list_apps()
+            except Exception as ex:
+                return Response("error", "Could not read the app list: %s" % type(ex).__name__)
+            for s in steps:
+                if s["op"] != "open":
+                    continue
+                matches, sure = match_apps(s.get("app", ""), apps)
+                if not matches:
+                    return Response("info", "No app called '%s' found on this phone." % s.get("app", ""))
+                if not sure and len(matches) > 1:
+                    return Response("need_info", "'%s' se kai apps milte hain: %s. Poora naam bolo." % (
+                        s.get("app", ""), ", ".join(a["label"] for a in matches[:5])))
+                s["package"], s["label"] = matches[0]["package"], matches[0]["label"]
+                s.pop("app", None)
+                if s["package"] in control.BLOCKED_PACKAGES:
+                    return Response("unsupported", "%s mein phone control kaam nahi karta: is phone par Settings "
+                                                   "khulte hi Android 'Lazey phone control' band kar deta hai. Settings "
+                                                   "ko main sirf khol sakta hoon: 'settings kholo'." % s["label"])
+        if not self.control.ready():
+            return Response("info", "Iske liye 'Lazey phone control' on karna hoga (Settings > Accessibility). "
+                                    "Tap 'Turn on phone control', switch it on, then say the steps again.",
+                            extra="control_setup")
+        if self._auto is not None:
+            return self._propose_automation(steps)
+        try:
+            action, preview = self.engine.propose("phone_control", {"steps": steps})
+        except Unsupported:
+            return Response("unsupported", "Phone control is not available on this device.")
+        except ValueError as ex:
+            return Response("error", "These steps cannot run: %s" % ex)
+        return Response("proposal", "Proposal: " + preview + "\nApprove?", action.id, action.hash)
+
+    def control_report(self):
+        """Control report, in the reply language."""
+        res = self._control_report()
+        return self.localized(res) if res is not None else None
+
+    def _control_report(self):
+        """Called when Lazey is back on screen: how did the approved phone-control steps go?"""
+        if not self._awaiting_control:
+            return None
+        r = self.control.take_result()
+        if not r or r.get("status") == "running":
+            return None
+        self._awaiting_control = False
+        self.store.audit("-", "phone_control_result", "approved", str(r.get("status")))
+        detail = str(r.get("detail") or "")
+        if r.get("status") != "done" and detail.startswith("CHOOSE:") and getattr(self, "_last_social", None):
+            names = [x for x in detail[7:].split("|") if x.strip()][:6]
+            app, text = self._last_social
+            self._choices = {"kind": "social_pick", "items": names, "app": app, "text": text}
+            return Response("choose", "%s par is naam ki %d chats mili. Kisko bhejna hai? (Kuch nahi bheja gaya.)"
+                            % (control.SOCIAL[app]["label"], len(names)),
+                            options=["%d. %s" % (i + 1, n) for i, n in enumerate(names)])
+        # Hinglish only: Devanagari (Hindi script) is left out of what was read off the screen; the app's
+        # fonts have no Hindi letters, so it showed as boxes. Lines with nothing else left are skipped.
+        read = []
+        for x in (r.get("read") or [])[:40]:
+            x = re.sub(r"\s+", " ", re.sub(r"[\u0900-\u097F]+", " ", str(x))).strip(" .,|-")
+            if re.search(r"\w", x):
+                read.append(x)
+        if r.get("status") == "done":
+            text = "Done: the step." if r.get("total") == 1 else "Done: all %s steps." % r.get("total", "")
+        else:
+            text = "Stopped at step %s of %s: %s." % (r.get("step"), r.get("total"), r.get("detail") or "failed")
+        if read:
+            text += "\nOn the screen:\n" + "\n".join("- " + x for x in read)
+        return Response("info" if r.get("status") == "done" else "error", text)
+
+    # ---------- Instagram / Messenger / Snapchat (by saved username, through phone control) ----------
+    def _handles(self, app=None):
+        return [h for h in self.store.all("handle") if app is None or h.get("app") == app]
+
+    def _save_handle(self, ent):
+        app, name, handle = ent.get("app"), (ent.get("name") or "").strip().lower(), ent.get("handle", "")
+        if (app not in control.SOCIAL and app != "gmail") or not name:
+            return Response("need_info", "Example: rahul ka instagram username rahul_23 hai")
+        if app == "gmail":
+            if not re.fullmatch(messaging.EMAIL_RE, handle):
+                return Response("error", "'%s' sahi email address nahi lagta." % handle)
+            for h in self._handles(app):
+                if h.get("name") == name:
+                    self.store.delete(h["id"])
+            self.store.put("handle", {"name": name, "app": app, "handle": handle.lower()})
+            return Response("info", "Saved: %s ka email %s. Ab bolo: '%s ko mail karo ki ...'" % (name, handle.lower(), name))
+        label = control.SOCIAL[app]["label"]
+        if not control.valid_handle(app, handle):
+            return Response("error", "'%s' is not a valid %s username." % (handle, label))
+        for h in self._handles(app):
+            if h.get("name") == name:
+                self.store.delete(h["id"])
+        self.store.put("handle", {"name": name, "app": app, "handle": handle})
+        return Response("info", "Saved: %s ka %s %s %s. Ab bolo: '%s ko %s pe hi bhejo'." % (
+            name, label, messaging.WHAT.get(app, "username"), _show_handle(app, handle), name, app))
+
+    def _list_handles(self):
+        hs = sorted(self._handles(), key=lambda h: (h["app"], h["name"]))
+        if not hs:
+            return Response("info", "Koi username saved nahi hai. Example: rahul ka instagram username rahul_23 hai")
+        return Response("info", "Saved usernames:\n" + "\n".join(
+            "- %s: %s %s" % (h["name"], messaging.LABEL.get(h["app"], h["app"]), _show_handle(h["app"], h["handle"]))
+            for h in hs))
+
+    def _delete_handle(self, ent):
+        app, name = ent.get("app"), (ent.get("name") or "").strip().lower()
+        gone = [h for h in self._handles(app) if h.get("name") == name]
+        for h in gone:
+            self.store.delete(h["id"])
+        label = messaging.LABEL.get(app, app)
+        what = messaging.WHAT.get(app, "username")
+        return Response("info", ("Deleted %s ka %s %s." if gone else "%s ka %s %s saved nahi tha.") % (name, label, what))
+
+    def _email_send(self, ent):
+        """'rahul ko mail karo ki kal meeting hai': Gmail opens with the email typed, the user presses Send."""
+        known = {h["name"]: h for h in self._handles("gmail")}
+        if ent.get("name_text") and not ent.get("text"):
+            words = ent["name_text"].split()
+            for i in range(len(words) - 1, 0, -1):
+                if " ".join(words[:i]).lower() in known:
+                    ent["name"], ent["text"] = " ".join(words[:i]).lower(), " ".join(words[i:])
+                    break
+            else:
+                ent["name"], ent["text"] = words[0].lower(), " ".join(words[1:]) or None
+        ent.pop("name_text", None)
+        if not ent.get("name"):
+            self._pending_msg = {"ent": ent, "need": "name"}
+            return Response("need_info", "Email kisko bhejna hai?")
+        name = ent["name"].strip().lower()
+        h = known.get(name)
+        if not h:
+            return Response("need_info", "Mujhe %s ka email address nahi pata. Ek baar bolo: '%s ka email "
+                                         "<address> hai', phir dobara bhejo." % (name, name))
+        if not ent.get("text"):
+            self._pending_msg = {"ent": ent, "need": "text"}
+            return Response("need_info", "%s ko email me kya likhna hai?" % name)
+        if not hasattr(self.messages, "open_email"):
+            return Response("unsupported", "Email works only in the phone app.")
+        text = ent["text"]
+        subject = text if len(text) <= 60 else text[:57].rstrip() + "..."
+        r = self.messages.open_email(h["handle"], subject, text)
+        self.store.audit("-", "email_compose", "not_required:user_presses_send", r.status)
+        if r.status != "handed_off":
+            return Response("error", "Gmail nahi khula: %s" % r.detail)
+        return Response("info", "Gmail khul raha hai: %s (%s) ko email likha hua hai. Send aap dabao." % (name, h["handle"]))
+
+    def _social_send(self, ent):
+        app = ent["channel"]
+        s = control.SOCIAL[app]
+        known = {h["name"]: h for h in self._handles(app)}
+        if ent.get("name_text") and not ent.get("text"):
+            # "insta rahul hi": the longest saved name at the start is the person, the rest the text
+            words = ent["name_text"].split()
+            for i in range(len(words) - 1, 0, -1):
+                if " ".join(words[:i]).lower() in known:
+                    ent["name"], ent["text"] = " ".join(words[:i]).lower(), " ".join(words[i:])
+                    break
+            else:
+                ent["name"] = words[0].lower()
+                ent["text"] = " ".join(words[1:]) or None
+        ent.pop("name_text", None)
+        if not ent.get("name"):
+            self._pending_msg = {"ent": ent, "need": "name"}
+            return Response("need_info", "%s pe kisko message bhejna hai?" % s["label"])
+        name = ent["name"].strip().lower()
+        h = known.get(name)
+        if not h and app in messaging.BY_NAME:   # LinkedIn / Discord: the chat is found by this name
+            h = {"handle": name}
+        if not h:
+            what = messaging.WHAT.get(app, "username")
+            return Response("need_info", "Mujhe %s ka %s %s nahi pata. Ek baar bolo: '%s ka %s <%s> hai', phir dobara "
+                                         "bhejo.\nExample: %s" % (name, s["label"], what, name, app, what,
+                                                                   messaging.EXAMPLE[app].split("  ->  ")[0]))
+        if not ent.get("text"):
+            self._pending_msg = {"ent": ent, "need": "text"}
+            return Response("need_info", "%s ko %s pe kya bhejna hai?" % (name, s["label"]))
+        if not self.control.capability_check():
+            return Response("unsupported", "%s messages work only in the phone app." % s["label"])
+        try:
+            installed = {a["package"] for a in self.apps.list_apps()} if self.apps.capability_check() else None
+        except Exception:
+            installed = None
+        if installed is not None and s["package"] not in installed:
+            return Response("info", "%s app is phone par install nahi hai, isliye message nahi bheja." % s["label"])
+        if not self.control.ready():
+            return Response("info", "%s pe message ke liye 'Lazey phone control' on karna hoga. Tap 'Turn on "
+                                    "phone control', switch it on, then say it again." % s["label"],
+                            extra="control_setup")
+        steps = control.social_steps(app, h["handle"], ent["text"])
+        if self._auto is not None:
+            return self._propose_automation(steps)
+        try:
+            action, _ = self.engine.propose("phone_control", {"steps": steps})
+        except Unsupported:
+            return Response("unsupported", "Phone control is not available on this device.")
+        except ValueError as ex:
+            return Response("error", "Cannot send this: %s" % ex)
+        note = ""
+        if messaging.SUPPORT.get(app) == "untested":
+            note += "\n(%s is not tested on a phone yet.)" % s["label"]
+        who = _show_handle(app, h["handle"])
+        self._last_social = (app, ent["text"])   # for "several chats match: which one?"
+        if app in messaging.BY_NAME:
+            return Response("proposal", 'Proposal: send on %s to the chat named "%s":\n"%s"\nSteps: open %s '
+                            'messages, open that chat (if several match, I ask you), type, press Send, check it was '
+                            'sent.%s\nApprove?' % (s["label"], h["handle"], ent["text"], s["label"], note),
+                            action.id, action.hash)
+        return Response("proposal", 'Proposal: send on %s to %s (%s):\n"%s"\nSteps: open the chat, check it is '
+                        '%s, type, press Send, check it was sent.%s\nApprove?' % (s["label"], name, who, ent["text"],
+                                                                  who, note), action.id, action.hash)
+
+    # ---------- Settings > Customize: messaging apps on this phone ----------
+    def messaging_setup(self):
+        """(apps found on the phone, state of everything they need) for Settings > Customize."""
+        try:
+            pkgs = [a["package"] for a in self.apps.list_apps()] if self.apps.capability_check() else []
+        except Exception:
+            pkgs = []
+        sms = getattr(self.messages, "default_sms_package", lambda: None)()
+        apps = messaging.scan(pkgs, sms)
+        self._not_installed = messaging.not_installed(pkgs)
+        counts = {}
+        for h in self._handles():
+            counts[h["app"]] = counts.get(h["app"], 0) + 1
+        state = {
+            "perms": {messaging.READ_CONTACTS: self.contacts.permission_check() == "granted",
+                      messaging.SEND_SMS: self.messages.permission_check() == "granted"},
+            "auto_send": bool(hasattr(self.messages, "arm_auto_send") and self.auto_send_ready()),
+            "phone_control": bool(self.control.capability_check() and self.control.ready()),
+            "handles": counts,
+            "installed": {a["id"] for a in apps},
+        }
+        return apps, state
+
+    # ---------- small talk ----------
+    def _smalltalk(self, kind, now):
+        """Greetings, thanks, help: answered locally, never an action."""
+        if kind == "greet":
+            h = now.hour
+            part = "Good morning" if h < 12 else "Good afternoon" if h < 17 else "Good evening"
+            return Response("info", "%s! Main Lazey hoon. Kya karun? Try: call mummy / battery kitni hai / "
+                                    "kal 5 baje yaad dilana." % part)
+        if kind == "how_are_you":
+            return Response("info", "Main badhiya hoon, shukriya! Aap batao, kya karna hai?")
+        if kind == "thanks":
+            return Response("info", "Koi baat nahi! Aur kuch chahiye to bolo.")
+        if kind == "bye":
+            return Response("info", "Bye! Zaroorat ho to bula lena.")
+        if kind == "ack":
+            return Response("info", "Okay. Aur kuch?")
+        if kind == "who":
+            return Response("info", "Main Lazey hoon, aapka offline personal assistant. Call, message, alarm, "
+                                    "reminders, notes aur phone status mein madad karta hoon.")
+        return Response("info", "Main yeh kar sakta hoon (English ya Hinglish mein bolo):\n"
+                                "- call mummy / rahul ko whatsapp pe call karo\n"
+                                "- rahul ko message bhejo ki main late hoon\n"
+                                "- alarm laga do subah 6 baje / 10 minute ka timer\n"
+                                "- kal 5 baje yaad dilana ki bill bharna hai / mere todo dikhao\n"
+                                "- note karo: ... / yaad rakho ...\n"
+                                "- battery kitni hai / what time is it\n"
+                                "- open whatsapp / kal ki photos dikhao\n"
+                                "- phone control (Approve ke baad): youtube kholo phir lofi search karo / "
+                                "whatsapp kholo phir rahul pe click karo phir hi type karo / back jao / home jao")
 
     # ---------- memory ----------
     def _remember(self, it):
@@ -583,6 +924,8 @@ class Assistant:
         item = c["items"][index]
         if c["kind"] == "app":
             return self._launch(item)
+        if c["kind"] == "social_pick":   # one of several chats with that name: a new plan, approved again
+            return self._social_send({"channel": c["app"], "name": item.lower(), "text": c["text"]})
         if c["kind"] == "daily_channel":
             return self._daily(dict(c["ent"], channel=item))
         if c["kind"] == "daily_contact":
@@ -840,7 +1183,7 @@ class Assistant:
                                          "open whatsapp")
         today = self.clock().date()
         bad = [s for s in steps if validate(self.backend.parse(s, today), today).intent in
-               ("unknown", "create_routine", "run_routine", "delete_routine", "list_routines")]
+               ("unknown", "smalltalk", "create_routine", "run_routine", "delete_routine", "list_routines")]
         if bad:
             return Response("error", "I do not understand these steps, so the routine was not saved: "
                             + "; ".join(bad))
@@ -928,6 +1271,9 @@ class Assistant:
         """'set an alarm for 6 and open whatsapp' -> 2 parts, only if every part is a command."""
         if re.match(r"^\s*(note|remember|yaad rakho|routine|create routine|make routine)\b", text, re.I):
             return None
+        if validate(self.backend.parse(text, today), today).intent in ("phone_control", "schedule_task",
+                                                                       "schedule_notice"):
+            return None  # "youtube kholo phir lofi search karo" is ONE approved plan, not separate commands
         parts = [p.strip(" ,.") for p in re.split(
             r"\s*;\s*|\s+(?:and then|then|aur phir|phir|uske baad|after that|and|aur)\s+", text, flags=re.I)]
         parts = [p for p in parts if p]
@@ -939,7 +1285,7 @@ class Assistant:
         if (len(parts) == 2 and intents == ["open_app", "send_message"]
                 and re.search(r"what'?s\s?app|whatsapp", parts[0], re.I)):
             return None
-        return parts if all(i not in ("unknown", "create_routine") for i in intents) else None
+        return parts if all(i not in ("unknown", "smalltalk", "create_routine") for i in intents) else None
 
     def _run_steps(self, steps, title=None):
         out, left_app, skipped = [], False, []
@@ -949,7 +1295,7 @@ class Assistant:
             if left_app and intent in ("open_app", "call_contact", "send_message", "show_alarms", "find_photos"):
                 skipped.append(step)  # another app is already open; opening one more would cut it off
                 continue
-            r = self.handle(step)
+            r = self._handle(step)   # untranslated: LEAVES_APP checks the English text; handle() translates all
             out.append("%d. %s" % (i + 1, r.text))
             if r.text.startswith(self.LEAVES_APP) or r.extra in ("await_auto_send", "auto_send_setup"):
                 left_app = True
@@ -1064,6 +1410,10 @@ class Assistant:
 
     def _send(self, ent):
         ent = dict(ent)
+        if ent.get("channel") in control.SOCIAL:
+            return self._social_send(ent)
+        if ent.get("channel") == "email":
+            return self._email_send(ent)
         if ent.get("name_text") and not ent.get("text"):
             if not ent.get("number") and self.contacts.permission_check() == "denied":
                 return Response("need_permission", "Sending this needs permission (read contacts). Allow it and "
@@ -1229,13 +1579,22 @@ class Assistant:
         # one-time reminders live in the same Java store; keep those that belong to open to-dos
         keep = set(recs) | {t["reminder_id"] for t in self.store.all("todo")
                             if t.get("reminder_id") and not t.get("done")} | {
-            r["trigger"]["sched_id"] for r in self.store.all("routine") if r.get("trigger")}
+            r["trigger"]["sched_id"] for r in self.store.all("routine") if r.get("trigger")} | {
+            a["sched_id"] for a in self.store.all("automation")}
         for sid in self.daily.java_ids() - keep:
             self.daily.cancel(sid)  # left over from deleted data
-        for sid in set(recs) - self.daily.java_ids():
+        java = self.daily.java_ids()
+        for sid in set(recs) - java:
             r = recs[sid]
             self.daily.execute({k: r[k] for k in ("sched_id", "channel", "name", "number", "text", "time", "days")
                                 if k in r})
+        for a in self.store.all("automation"):   # lost alarms (force-stop): set them again
+            if a["sched_id"] in java:
+                continue
+            if a.get("kind") == "notify":
+                self.daily.set_notice(a["sched_id"], a["text"], a["time"], a.get("days"))
+            else:
+                self.daily.set_automation(a["sched_id"], a["label"], a["time"], a.get("days"))
         return self.daily.reschedule_all()
 
     def _direct_call(self, name, number, sim):
@@ -1299,6 +1658,11 @@ class Assistant:
 
     # ---------- approval ----------
     def approve(self, action_id, shown_hash):
+        """Approve, in the reply language."""
+        res = self._approve(action_id, shown_hash)
+        return self.localized(res) if res is not None else None
+
+    def _approve(self, action_id, shown_hash):
         res = self.engine.approve(action_id, shown_hash)
         a = self.engine.actions.get(action_id)
         if a and a.type == "calendar_event" and res.status in ("done", "handed_off"):
@@ -1307,8 +1671,12 @@ class Assistant:
                                     "calendar": res.status})
         if a and a.type == "sms_message" and res.status == "done":
             self._last_contact = (a.payload["name"], a.payload["number"])  # sent, not just proposed
+        if a and a.type == "phone_control" and res.status == "handed_off":
+            self._awaiting_control = True
         if a and a.type == "daily_message" and res.status == "done":
             self.store.put("schedule", dict(a.payload))  # encrypted record; the alarm is already set
+        if a and a.type == "automation" and res.status == "done":
+            self.store.put("automation", dict(a.payload, kind="app"))
         specific = {
             ("daily_message", "done"): ("Daily message scheduled for %s every day." % a.payload.get("time")
                                         if a else "Daily message scheduled.")
@@ -1323,6 +1691,14 @@ class Assistant:
                                               "tap Save there. The task is saved in the app.",
             ("phone_call", "done"): "Call started (%s)." % (a.payload.get("name", "") if a else ""),
             ("phone_call", "handed_off"): "Dialer opened with the number filled in. Tap the call button to call.",
+            ("phone_control", "handed_off"): "Running the steps now. I will tell you how it went when you are back "
+                                             "in Lazey.",
+            ("phone_control", "denied"): "'Lazey phone control' is off, so nothing was done. Turn it on in "
+                                         "Settings > Accessibility and say the steps again.",
+            ("automation", "done"): "Automation saved. At its time you get a notification: tap it and it runs. "
+                                    "See or delete it in Menu > Automations.",
+            ("automation", "denied"): "Automations need permission to show notifications. Allow it and say the "
+                                      "same thing again.",
         }
         generic = {
             "denied": "Android permission was not given. Nothing changed.",
@@ -1331,11 +1707,161 @@ class Assistant:
             "unsupported": "This is not supported on this device.",
         }
         msg = specific.get((a.type if a else "", res.status)) or generic.get(res.status, "Failed: " + res.detail)
+        if a and a.type == "automation" and res.status == "done":
+            return self._with_battery_check(Response("info", msg))
         if a and a.type == "daily_message" and res.status == "done" and not self.daily_battery_ok():
             return Response("info", msg + "\nImportant: allow Lazey to run in the background on the "
                             "next screen, or your phone may stop daily messages after the first day.",
                             extra="battery_exemption")
         return Response("info", msg)
+
+    # ---------- automations (Menu > Automations) ----------
+    def _schedule_notice(self, ent):
+        """'daily subah 9 baje mujhe padhna hai': a reminder notification at that time, every day."""
+        text = (ent.get("text") or "").strip()
+        if not text:
+            return Response("need_info", "What should the daily reminder say? Example: every day at 9 am remind me "
+                                         "to study")
+        if not ent.get("time"):
+            return Response("need_info", "At what time? Example: every day at 9 am remind me to study")
+        if not self.daily.capability_check() or not hasattr(self.daily, "set_notice"):
+            return Response("unsupported", "Automations are not available on this device.")
+        need = daily_permissions_of(self.daily, "whatsapp")  # notification permission
+        if need:
+            return Response("need_permission", "Reminders need permission to show notifications. Allow it and say "
+                            "the same thing again.", permissions=need)
+        days = ent.get("days") if ent.get("days") and len(ent["days"]) < 7 else None
+        sid = secrets.randbelow(2 ** 31 - 2) + 1
+        res = self.daily.set_notice(sid, text[:200], ent["time"], days)
+        if res.status != "done":
+            return Response("error", "Could not save the automation: %s" % res.detail)
+        self.store.put("automation", {"kind": "notify", "text": text[:200], "time": ent["time"], "days": days,
+                                      "sched_id": sid})
+        self.store.audit("-", "automation_notice", "not_required:own_reminder", "done")
+        return self._with_battery_check(Response(
+            "info", 'Automation saved: every %s at %s you get a reminder "%s". See it in Menu > Automations.'
+            % (days_text(days), ent["time"], text[:200])))
+
+    def _schedule_task(self, ent):
+        """'har din 7 baje youtube kholo phir lofi search karo': at the time a notification; tapping it runs
+        the command. Phone-control steps are checked and approved NOW (one card), like running them now."""
+        command = (ent.get("command") or "").strip()
+        if not ent.get("time"):
+            return Response("need_info", "At what time? Example: every day at 7 am open youtube then search lofi")
+        if not self.daily.capability_check() or not hasattr(self.daily, "set_automation"):
+            return Response("unsupported", "Automations are not available on this device.")
+        today = self.clock().date()
+        days = ent.get("days") if ent.get("days") and len(ent["days"]) < 7 else None
+        self._auto = {"time": ent["time"], "days": days, "command": command}
+        try:
+            if ent.get("social"):                       # a daily message on Instagram, LinkedIn, ...
+                return self._social_send({k: v for k, v in ent["social"].items()
+                                          if k in ("channel", "name", "text", "name_text")})
+            it = validate(self.backend.parse(command, today), today)
+            if it.intent == "phone_control":
+                return self._phone_control(it.entities)
+            if it.intent == "open_app":   # opening an app needs no phone control: run the command itself
+                return self._propose_automation(None)
+            if it.intent in ("device_info", "plan_day", "list_todos", "briefing", "query_notes"):
+                return self._propose_automation(None)
+        finally:
+            self._auto = None
+        return Response("info", "I can automate: reminders, messages, opening apps, phone-control steps and phone "
+                                "status. Example: every day at 7 am open youtube then search lofi")
+
+    def _propose_automation(self, steps):
+        auto = self._auto
+        label = re.sub(r"\s+", " ", auto["command"]).strip()[:80] or "automation"
+        payload = {"sched_id": secrets.randbelow(2 ** 31 - 2) + 1, "time": auto["time"], "label": label,
+                   "command": auto["command"][:300]}
+        if steps:
+            payload["steps"] = steps
+        if auto.get("days"):
+            payload["days"] = list(auto["days"])
+        try:
+            action, preview = self.engine.propose("automation", payload)
+        except Unsupported:
+            return Response("unsupported", "Automations are not available on this device.")
+        except ValueError as ex:
+            return Response("error", "Cannot save this automation: %s" % ex)
+        return Response("proposal", "Proposal: " + preview + "\nApprove?", action.id, action.hash)
+
+    def run_automation(self, sched_id):
+        """Run automation, in the reply language."""
+        res = self._run_automation(sched_id)
+        return self.localized(res) if res is not None else None
+
+    def _run_automation(self, sched_id):
+        """The automation's notification was tapped: run it once."""
+        rec = next((a for a in self.store.all("automation") if a.get("sched_id") == sched_id), None)
+        if rec is None or rec.get("kind") != "app":
+            return Response("info", "That automation was deleted, so nothing was run.")
+        self.store.audit("-", "automation_run", "not_required:user_approved_automation", "started")
+        if not rec.get("steps"):
+            return self._handle(rec["command"])         # same checks and cards as when typed
+        if not self.control.ready():
+            return Response("info", "Iske liye 'Lazey phone control' on karna hoga (Settings > Accessibility). "
+                                    "Tap 'Turn on phone control', switch it on, then say the steps again.",
+                            extra="control_setup")
+        try:
+            res = self.engine.run_direct("phone_control", {"steps": rec["steps"]}, "user_approved_automation")
+        except Unsupported:
+            return Response("unsupported", "Phone control is not available on this device.")
+        except ValueError as ex:
+            return Response("error", "These steps cannot run: %s" % ex)
+        if res.status == "handed_off":
+            self._awaiting_control = True
+            return Response("info", "Running the automation now. I will tell you how it went when you are back in "
+                                    "Lazey.")
+        return Response("error", "Failed: %s" % res.detail)
+
+    def list_automations(self):
+        """Everything that runs at a set time: [{src, id, time, days, what, how}] sorted by time."""
+        out = []
+        for a in self.store.all("automation"):
+            if a.get("kind") == "notify":
+                out.append({"src": "automation", "id": a["id"], "time": a["time"], "days": a.get("days"),
+                            "what": 'Reminder: "%s"' % a["text"], "how": "Notification"})
+            else:
+                out.append({"src": "automation", "id": a["id"], "time": a["time"], "days": a.get("days"),
+                            "what": a["label"], "how": "Tap the notification to run" + (
+                                ":\n" + automation_steps(a) if a.get("steps") else "")})
+        for d in self.store.all("schedule"):
+            out.append({"src": "schedule", "id": d["id"], "time": d.get("time", "?"), "days": d.get("days"),
+                        "what": 'Message to %s: "%s"' % (d.get("name", "?"), d.get("text", "")),
+                        "how": "SMS, sent by itself" if d.get("channel") == "sms"
+                        else "WhatsApp: tap the notification, then Send"})
+        for r in self.store.all("routine"):
+            if r.get("trigger"):
+                out.append({"src": "routine", "id": r["id"], "time": r["trigger"]["time"],
+                            "days": r["trigger"].get("days"), "what": "Routine: %s" % r["name"],
+                            "how": "Tap the notification to run"})
+        return sorted(out, key=lambda x: (x["time"], x["what"]))
+
+    def delete_automation(self, src, rid):
+        if src == "schedule":
+            return self.delete_schedule(rid)
+        if src == "routine":
+            r = next((x for x in self.store.all("routine") if x["id"] == rid), None)
+            return bool(r) and self._unschedule_routine(r["name"]) is not None
+        rec = next((a for a in self.store.all("automation") if a["id"] == rid), None)
+        if rec is None:
+            return False
+        try:
+            self.daily.cancel(rec["sched_id"])  # stop the alarm first
+        except Exception:
+            return False
+        self.store.audit("-", "automation_deleted", "n/a", "done")
+        return self.store.delete(rid)
+
+    def _automations_text(self):
+        items = self.list_automations()
+        if not items:
+            return Response("info", "No automations yet. Examples: every day at 9 am remind me to study / every day "
+                                    "at 7 am open youtube then search lofi", extra="automations")
+        return Response("info", "Your automations:\n" + "\n".join(
+            "- every %s at %s: %s" % (days_text(x["days"]), x["time"], x["what"]) for x in items),
+            extra="automations")
 
     def daily_battery_ok(self):
         fn = getattr(self.daily, "battery_exempt", None)

@@ -1,9 +1,11 @@
 """Voice on Android with the phone's own engines (the "Android fallback" path of the
 PocketMind Voice branch, rewritten in Python/pyjnius):
 
-  Listener: android.speech.SpeechRecognizer. The on-device recognizer is used when the phone
-  has one (Android 13+); otherwise the normal recognizer, which MAY send audio to Google.
-  The UI shows which one is in use. Our app itself has no INTERNET permission.
+  Listener (default, engine "builtin"): Lazey's own voice pack, the Vosk engine with a small
+  Indian English model shipped inside the APK (java/org/pa/assistant/VoskEngine.java). It works on
+  every phone from the first start, without internet and without a language-pack download.
+  Listener (engine "phone"): android.speech.SpeechRecognizer, on-device only (Android 13+); its
+  language pack must be downloaded once. Our app itself has no INTERNET permission.
   Speaker:  android.speech.tts.TextToSpeech, sentence by sentence (pa.voice.chunk).
 
 Rules kept from the branch: mic and speaker are never on together (listening stops speech,
@@ -12,6 +14,7 @@ Callbacks arrive on Android threads; `on_event` must hand them to the UI thread 
 """
 from . import android_util as au
 from .. import voice as V
+from ..voice_fix import normalize as fix_builtin_text
 
 try:
     from jnius import PythonJavaClass, java_method  # type: ignore
@@ -131,8 +134,36 @@ class _SupportCallback(PythonJavaClass):
         self.cb([], [], [], int(code))
 
 
+class _VoskListener(PythonJavaClass):
+    """org.pa.assistant.VoskEngine.Listener: events from the built-in voice pack (main thread)."""
+    __javainterfaces__ = ["org/pa/assistant/VoskEngine$Listener"]
+    __javacontext__ = "app"
+
+    def __init__(self, cb):
+        super().__init__()
+        self.cb = cb
+
+    @java_method("(Ljava/lang/String;Ljava/lang/String;)V")
+    def onEvent(self, kind, value):
+        self.cb(str(kind), "" if value is None else str(value))
+
+
+def builtin_error_text(code):
+    """VoskEngine error codes -> one line for the chat."""
+    code = code or ""
+    if code == "loading":
+        return "The voice pack is still loading. Try again in a moment."
+    if code.startswith("load:"):
+        return "Lazey's voice pack could not load (%s). Type instead, or pick 'Phone speech' in Voice." % (
+            code[5:][:80] or "unknown error")
+    if code.startswith("mic:"):
+        return "Could not use the microphone. Another app may be using it; close it and try again."
+    return "Voice input failed (%s)." % code[:80]
+
+
 class AndroidVoice:
-    """on_event(kind, value): kind in ready | partial | processing | final | nospeech | error | idle."""
+    """on_event(kind, value): kind in loading | ready | partial | processing | final | nospeech | error | idle,
+    plus builtin_status / offline_status for the Voice screen."""
 
     def __init__(self, on_event):
         self.on_event = on_event
@@ -146,6 +177,12 @@ class AndroidVoice:
         self._good_plan = None            # last plan that produced a result on this phone
         self._queue = []
         self.offline_lang = None          # language whose offline pack is installed (from check_offline)
+        self.engine = V.DEFAULT_ENGINE    # "builtin" (Lazey's voice pack) | "phone" (phone's recognizer)
+        self.builtin_state = "none"       # none | loading | ready | error
+        self.builtin_error = ""
+        self._vosk_load_cb = None         # keep references: Java holds only weak proxies
+        self._vosk_turn_cb = None
+        self._start_when_loaded = False
         self._support_cb = None
         self._helper_sr = None            # on-device recognizer used for check/download
         self._tts = None
@@ -164,6 +201,9 @@ class AndroidVoice:
         return au.granted(au.RECORD_AUDIO)
 
     def recognizer_label(self):
+        if self.engine == "builtin":
+            st = {"loading": ", loading", "error": ", could not load"}.get(self.builtin_state, "")
+            return "Lazey voice pack, offline, English (India)%s" % st
         plan = self._plan or self._good_plan or (self._plans(self._prefer_offline) or [None])[0]
         if plan is None:
             return "offline speech not installed" if self._prefer_offline else "not available"
@@ -207,10 +247,80 @@ class AndroidVoice:
     def _event(self, kind, value):
         self.on_event(kind, value)
 
+    # ---------- built-in voice pack (Vosk) ----------
+    def _vosk(self):
+        return au.autoclass("org.pa.assistant.VoskEngine")
+
+    def load_builtin(self):
+        """Copy (first start only) and load the built-in voice pack in the background.
+        Result: event 'builtin_status'. Called on the first mic tap and when Voice is opened."""
+        if not au.ANDROID or self.builtin_state in ("loading", "ready"):
+            return
+        self.builtin_state, self.builtin_error = "loading", ""
+        try:
+            self._vosk_load_cb = _VoskListener(self._on_builtin_loaded)
+            self._vosk().load(au.mActivity, self._vosk_load_cb)
+        except Exception as ex:
+            self._on_builtin_loaded("load_error", type(ex).__name__)
+
+    def _on_builtin_loaded(self, kind, value):
+        if kind == "loaded":
+            self.builtin_state, self.builtin_error = "ready", ""
+        else:
+            self.builtin_state, self.builtin_error = "error", value or "unknown"
+        self._event("builtin_status", self.builtin_state)
+        if self._start_when_loaded:   # the mic was tapped while the pack was loading
+            self._start_when_loaded = False
+            if self.builtin_state == "ready":
+                self._vosk_start()
+            else:
+                self._listening = False
+                self._event("error", builtin_error_text("load:" + self.builtin_error))
+
+    def _vosk_start(self):
+        self._plan, self.on_device = None, True
+        try:
+            self._vosk_turn_cb = _VoskListener(self._on_builtin_turn)
+            self._vosk().start(self._vosk_turn_cb)   # if it cannot start, an "error" event follows
+        except Exception as ex:
+            self._listening = False
+            self._event("error", "Could not start the microphone: %s" % type(ex).__name__)
+
+    def _on_builtin_turn(self, kind, value):
+        if not self._listening:
+            return   # cancelled meanwhile
+        if kind in ("ready", "partial"):
+            self._event(kind, value or None)
+            return
+        self._listening = False
+        if kind == "final" and value:
+            # the pack has no Hindi words / app names: "battery kidney" -> "battery kitni hai"
+            self._event("final", fix_builtin_text(value) or value)
+        elif kind in ("final", "nospeech"):
+            self._event("nospeech", None)
+        else:
+            self._event("error", builtin_error_text(value))
+
+    def _start_builtin(self):
+        self._listening = True
+        if self.builtin_state == "ready":
+            self._vosk_start()
+            return
+        if self.builtin_state == "error":
+            self._listening = False
+            self._event("error", builtin_error_text("load:" + self.builtin_error))
+            return
+        self._start_when_loaded = True
+        self._event("loading", None)
+        self.load_builtin()
+
     @run_on_ui_thread
     def start_listening(self, prefer_offline=True):
         self.stop_speaking()  # never listen and speak at the same time
         self._destroy_recognizer()
+        if self.engine == "builtin":
+            self._start_builtin()
+            return
         self._prefer_offline = prefer_offline
         self._queue = self._plans(prefer_offline)
         self._start_next()
@@ -258,6 +368,17 @@ class AndroidVoice:
     @run_on_ui_thread
     def stop_listening(self):
         """Stop recording; the recognizer still delivers what it heard so far."""
+        if self.engine == "builtin" and self._listening:
+            if self._start_when_loaded:   # still loading: nothing was recorded yet
+                self._start_when_loaded, self._listening = False, False
+                self._event("idle", None)
+                return
+            try:
+                self._vosk().stop()   # what was heard so far arrives as "final"
+            except Exception:
+                self._listening = False
+                self._event("idle", None)
+            return
         if self._sr is not None and self._listening:
             try:
                 self._sr.stopListening()
@@ -267,6 +388,12 @@ class AndroidVoice:
     @run_on_ui_thread
     def cancel_listening(self):
         was = self._listening
+        self._start_when_loaded = False
+        if au.ANDROID and self.builtin_state == "ready":
+            try:
+                self._vosk().cancel()
+            except Exception:
+                pass
         self._destroy_recognizer()
         if was:
             self._event("idle", None)

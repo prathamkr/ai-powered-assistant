@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lazey phone control: runs ONLY the steps you approved in Lazey (java/org/pa/assistant/
+     PhoneControlService.java). Window events are not used; the screen is looked at only while an
+     approved plan runs. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds"
+    android:notificationTimeout="300"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/phone_control_description" />

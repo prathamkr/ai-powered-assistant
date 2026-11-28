@@ -9,3 +9,12 @@ This product includes software derived from PokeClaw
 Derived parts (rewritten in Python, changed as described in docs/THIRD_PARTY.md):
   pa/adapters/device_info.py   from PokeClaw tool/impl/GetDeviceInfoTool.java
   pa/everyday.py               design of PipelineRouter.kt, skill/Skill.kt, knowledge/KbAddTodoTool.kt
+
+Built-in voice pack (offline speech recognition), bundled in the APK unchanged:
+  Vosk speech recognition toolkit (com.alphacephei:vosk-android), Copyright Alpha Cephei Inc.
+  Licensed under the Apache License, Version 2.0. https://github.com/alphacep/vosk-api
+  vosk-model-small-en-in-0.4 (Indian English model, folder vosk_model/), Alpha Cephei Inc.
+  Licensed under the Apache License, Version 2.0. https://alphacephei.com/vosk/models
+  JNA (net.java.dev.jna:jna), used by Vosk. Licensed under the Apache License, Version 2.0
+  (dual-licensed LGPL-2.1 / Apache-2.0; used here under Apache-2.0). https://github.com/java-native-access/jna
+  The Apache License 2.0 text is in LICENSES/Apache-2.0-PokeClaw.txt (same license text).
